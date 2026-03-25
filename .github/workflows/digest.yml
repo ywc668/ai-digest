@@ -1,0 +1,46 @@
+name: Daily AI Research Digest
+
+on:
+  schedule:
+    # Run daily at 14:00 UTC = 7:00 AM Pacific
+    - cron: '0 14 * * *'
+  workflow_dispatch:  # Manual trigger from Actions tab
+
+permissions:
+  contents: write  # Needed to commit state.json back
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          DIGEST_TO_EMAIL: ${{ secrets.DIGEST_TO_EMAIL }}
+        run: python main.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "AI Digest Bot"
+          git config user.email "ai-digest-bot@users.noreply.github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "chore: update digest state [skip ci]"
+          git push

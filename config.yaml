@@ -1,0 +1,164 @@
+# AI Research Digest v2 Configuration
+# ──────────────────────────────────────────────
+
+# ── Interest Profile ──────────────────────────
+# Natural language description scored by Claude.
+# Be specific — the more precise, the better the filtering.
+interest_profile: |
+  I am a software engineer focused on cloud infrastructure, Kubernetes, and DevOps,
+  transitioning toward ML/AI infrastructure roles. My core interests are:
+
+  HIGH PRIORITY:
+  - LLM inference optimization (vLLM, TensorRT-LLM, SGLang, PagedAttention)
+  - AI agent frameworks and agentic systems (MCP, LangGraph, tool use, multi-agent)
+  - ML infrastructure and MLOps (Ray, model serving, GPU scheduling, training pipelines)
+  - Distributed systems for AI (inference at scale, KV cache, speculative decoding)
+  - Open-source AI models and releases (new model architectures, benchmarks, weights)
+
+  MEDIUM PRIORITY:
+  - Kubernetes and cloud-native infrastructure innovations
+  - DevOps automation and AI-assisted development tools
+  - Transformer architecture research and improvements
+  - RLHF, alignment, and safety research
+  - Retrieval-augmented generation (RAG) systems
+
+  LOW PRIORITY (still interesting):
+  - General AI industry news and company announcements
+  - Programming language developments (Rust, Go, C++)
+  - Quantitative trading and financial ML
+  - Hardware for AI (GPUs, TPUs, custom silicon)
+
+# ── Scoring Settings ──────────────────────────
+scoring:
+  # Claude model for scoring
+  model: "claude-sonnet-4-20250514"
+  # Max concurrent scoring requests
+  max_concurrent: 5
+
+  # -- Progressive filtering (3-stage cascade) --
+  # Stage 1: Title-only screen (cheap, filters ~60% of items)
+  stage1_prompt: "title_only"
+  stage1_threshold: 3      # items scoring < 3 on title alone are dropped
+  # Stage 2: Title + summary scoring (moderate cost)
+  stage2_threshold: 5      # items scoring < 5 are dropped
+  # Stage 3: Full analysis for top candidates (only if summary score >= 7)
+  stage3_threshold: 7      # triggers detailed analysis with full context
+  # Final minimum score to include in digest
+  min_score: 5
+  # Maximum items per digest
+  max_items: 15
+
+# ── Deduplication Settings ────────────────────
+dedup:
+  # Similarity threshold for fuzzy title matching (0.0 - 1.0)
+  title_similarity_threshold: 0.7
+  # Enable cross-source dedup (same story on multiple outlets)
+  cross_source: true
+
+# ── Feed Sources ──────────────────────────────
+feeds:
+  # ── Papers ──
+  arxiv:
+    - name: "arXiv — AI"
+      url: "https://rss.arxiv.org/rss/cs.AI"
+    - name: "arXiv — Machine Learning"
+      url: "https://rss.arxiv.org/rss/cs.LG"
+    - name: "arXiv — Distributed Computing"
+      url: "https://rss.arxiv.org/rss/cs.DC"
+    - name: "arXiv — Software Engineering"
+      url: "https://rss.arxiv.org/rss/cs.SE"
+    - name: "arXiv — Computation and Language"
+      url: "https://rss.arxiv.org/rss/cs.CL"
+
+  # ── Technical Blogs (deep, original) ──
+  blogs:
+    - name: "Lilian Weng"
+      url: "https://lilianweng.github.io/index.xml"
+    - name: "Simon Willison"
+      url: "https://simonwillison.net/atom/everything/"
+    - name: "Chip Huyen"
+      url: "https://huyenchip.com/feed.xml"
+    - name: "Jay Alammar"
+      url: "https://jalammar.github.io/feed.xml"
+    - name: "The Gradient"
+      url: "https://thegradient.pub/rss/"
+    - name: "Kaitchup (ML/LLM quantization)"
+      url: "https://kaitchup.substack.com/feed"
+    - name: "Cameron Wolfe (deep learning)"
+      url: "https://cameronrwolfe.substack.com/feed"
+
+  # ── Lab & Company Blogs ──
+  labs:
+    - name: "Anthropic Research"
+      url: "https://www.anthropic.com/research/rss.xml"
+    - name: "OpenAI Blog"
+      url: "https://openai.com/blog/rss.xml"
+    - name: "Google DeepMind Blog"
+      url: "https://blog.research.google/feeds/posts/default?alt=rss"
+    - name: "Meta AI Blog"
+      url: "https://ai.meta.com/blog/rss/"
+    - name: "Hugging Face Blog"
+      url: "https://huggingface.co/blog/feed.xml"
+    - name: "NVIDIA Technical Blog"
+      url: "https://developer.nvidia.com/blog/feed/"
+
+  # ── GitHub Releases ──
+  github:
+    - name: "vLLM releases"
+      url: "https://github.com/vllm-project/vllm/releases.atom"
+    - name: "SGLang releases"
+      url: "https://github.com/sgl-project/sglang/releases.atom"
+    - name: "llama.cpp releases"
+      url: "https://github.com/ggerganov/llama.cpp/releases.atom"
+    - name: "Ray releases"
+      url: "https://github.com/ray-project/ray/releases.atom"
+    - name: "LangChain releases"
+      url: "https://github.com/langchain-ai/langchain/releases.atom"
+    - name: "LlamaIndex releases"
+      url: "https://github.com/run-llama/llama_index/releases.atom"
+    - name: "Ollama releases"
+      url: "https://github.com/ollama/ollama/releases.atom"
+    - name: "Transformers releases"
+      url: "https://github.com/huggingface/transformers/releases.atom"
+    - name: "OpenHands releases"
+      url: "https://github.com/All-Hands-AI/OpenHands/releases.atom"
+    - name: "TensorRT-LLM releases"
+      url: "https://github.com/NVIDIA/TensorRT-LLM/releases.atom"
+    - name: "MCP spec releases"
+      url: "https://github.com/modelcontextprotocol/specification/releases.atom"
+    - name: "Argo Rollouts releases"
+      url: "https://github.com/argoproj/argo-rollouts/releases.atom"
+
+  # ── Newsletters & Digests ──
+  newsletters:
+    - name: "The Batch (Andrew Ng)"
+      url: "https://www.deeplearning.ai/the-batch/feed/"
+    - name: "Ahead of AI (Sebastian Raschka)"
+      url: "https://magazine.sebastianraschka.com/feed"
+    - name: "AI News (buttondown)"
+      url: "https://buttondown.email/ainews/rss"
+    - name: "Latent Space"
+      url: "https://www.latent.space/feed"
+    - name: "Last Week in AI"
+      url: "https://lastweekin.ai/feed"
+    - name: "Interconnects (Nathan Lambert)"
+      url: "https://www.interconnects.ai/feed"
+
+  # ── Podcasts (show notes via RSS) ──
+  podcasts:
+    - name: "No Priors (AI venture podcast)"
+      url: "https://nopriors.libsyn.com/rss"
+    - name: "Practical AI"
+      url: "https://changelog.com/practicalai/feed"
+    - name: "Gradient Dissent (W&B)"
+      url: "https://feeds.captivate.fm/gradient-dissent/"
+
+# ── Email Settings ────────────────────────────
+email:
+  subject_prefix: "🧠 AI Digest"
+  sender_name: "AI Research Digest"
+
+# ── State Management ──────────────────────────
+state:
+  retention_days: 30
+  state_file: "state.json"
