@@ -4,15 +4,15 @@ on:
   schedule:
     # Run daily at 14:00 UTC = 7:00 AM Pacific
     - cron: '0 14 * * *'
-  workflow_dispatch:  # Manual trigger from Actions tab
+  workflow_dispatch:  # Manual trigger
 
 permissions:
-  contents: write  # Needed to commit state.json back
+  contents: write
 
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30  # Increased from 15 to handle rate-limited scoring
 
     steps:
       - name: Checkout repo
