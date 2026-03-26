@@ -42,6 +42,8 @@ scoring:
 
   min_score: 5
   max_items: 15
+  # Cap total items sent to scoring (prevents timeout on first run / large feeds)
+  max_items_to_score: 150
 
 # ── Dedup Settings ────────────────────────────
 dedup:

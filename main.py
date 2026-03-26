@@ -88,11 +88,28 @@ async def run() -> None:
         state.save()
         return
 
-    # 5. Progressive scoring
+    # 5. Cap items to score (prevents timeout on large feeds)
+    max_to_score = scoring_config.get("max_items_to_score", 150)
+    items_to_score = new_items
+    skipped_count = 0
+    if len(new_items) > max_to_score:
+        # Prioritize: blogs/labs/github/newsletters/podcasts first (fewer, higher signal),
+        # then arXiv papers fill remaining slots
+        priority_items = [i for i in new_items if i.source_category != "arxiv"]
+        arxiv_items = [i for i in new_items if i.source_category == "arxiv"]
+        remaining_slots = max(0, max_to_score - len(priority_items))
+        items_to_score = priority_items + arxiv_items[:remaining_slots]
+        skipped_count = len(new_items) - len(items_to_score)
+        logger.info(
+            f"Scoring cap: {len(new_items)} new items → scoring {len(items_to_score)} "
+            f"(skipped {skipped_count} low-priority arXiv papers)"
+        )
+
+    # 6. Progressive scoring
     logger.info("─" * 40)
     logger.info("Phase 3: Progressive AI scoring (3-stage cascade)")
     scored_items = await score_items(
-        items=new_items,
+        items=items_to_score,
         interest_profile=config["interest_profile"],
         scoring_config=scoring_config,
     )
@@ -102,8 +119,10 @@ async def run() -> None:
     for item in scored_items:
         stage = item.score_stage or "unknown"
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
+    if skipped_count > 0:
+        stage_counts["skipped"] = skipped_count
 
-    # 6. Filter by min score
+    # 7. Filter by min score
     min_score = scoring_config.get("min_score", 5)
     max_items = scoring_config.get("max_items", 15)
     qualified = [item for item in scored_items if (item.score or 0) >= min_score]
@@ -114,7 +133,7 @@ async def run() -> None:
         f"→ {len(digest_items)} in digest (max {max_items})"
     )
 
-    # 7. Mark all new items as seen
+    # 8. Mark ALL new items as seen (including skipped ones, so they don't pile up)
     state.mark_batch_seen(new_items)
 
     # 8. Compose and send
