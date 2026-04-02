@@ -1,9 +1,9 @@
 name: Daily AI Research Digest
 
 on:
-  schedule:
+  # schedule:
     # Run daily at 14:00 UTC = 7:00 AM Pacific
-    - cron: '0 14 * * *'
+    # - cron: '0 14 * * *'
   workflow_dispatch:  # Manual trigger
 
 permissions:
