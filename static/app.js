@@ -6,7 +6,8 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const CATEGORIES = [
   ["", "All"], ["arxiv", "Papers"], ["blogs", "Blogs"], ["labs", "Labs"],
-  ["github", "Releases"], ["newsletters", "Newsletters"], ["podcasts", "Podcasts"],
+  ["github", "Releases"], ["newsletters", "Newsletters"], ["community", "Community"],
+  ["podcasts", "Podcasts"],
 ];
 
 const state = {
@@ -381,9 +382,89 @@ async function pollStatus() {
   log.scrollTop = log.scrollHeight;
 }
 
+// ── sources editor ───────────────────────────
+
+/* model: {category: [{name, url, enabled, custom}]} — catalog entries first,
+   then any config feeds not in the catalog (custom). */
+let sourcesModel = {};
+
+async function loadSources() {
+  const data = await api("/api/catalog");
+  const enabledUrls = new Set(Object.keys(data.enabled));
+  const catalogUrls = new Set();
+  sourcesModel = {};
+  for (const [cat, entries] of Object.entries(data.catalog || {})) {
+    sourcesModel[cat] = entries.map((e) => {
+      catalogUrls.add(e.url);
+      return { name: e.name, url: e.url, enabled: enabledUrls.has(e.url), custom: false };
+    });
+  }
+  const cfg = await api("/api/config");
+  for (const [url, name] of Object.entries(data.enabled)) {
+    if (catalogUrls.has(url)) continue;
+    // find the category this custom feed lives in
+    for (const [cat, feeds] of Object.entries(cfg.parsed.feeds || {})) {
+      if (feeds.some((f) => f.url === url)) {
+        (sourcesModel[cat] = sourcesModel[cat] || []).push({ name, url, enabled: true, custom: true });
+        break;
+      }
+    }
+  }
+  renderSources();
+}
+
+function renderSources() {
+  $("#sources-groups").innerHTML = Object.entries(sourcesModel)
+    .filter(([, entries]) => entries.length)
+    .map(([cat, entries]) => `
+    <div class="source-group">
+      <h3 class="source-group-head">${esc(cat)}</h3>
+      ${entries.map((e, i) => `
+        <label class="source-row ${e.enabled ? "on" : ""}">
+          <input type="checkbox" data-cat="${esc(cat)}" data-i="${i}" ${e.enabled ? "checked" : ""}>
+          <span class="source-name">${esc(e.name)}${e.custom ? ' <span class="badge">custom</span>' : ""}</span>
+          <span class="source-url">${esc(hostOf(e.url))}</span>
+        </label>`).join("")}
+    </div>`).join("");
+}
+
+$("#sources-groups").addEventListener("change", (e) => {
+  const cb = e.target;
+  if (cb.type !== "checkbox") return;
+  sourcesModel[cb.dataset.cat][Number(cb.dataset.i)].enabled = cb.checked;
+  cb.closest(".source-row").classList.toggle("on", cb.checked);
+});
+
+$("#add-feed-btn").addEventListener("click", () => {
+  const cat = $("#add-feed-cat").value;
+  const name = $("#add-feed-name").value.trim();
+  const url = $("#add-feed-url").value.trim();
+  if (!name || !/^https?:\/\//.test(url)) { toast("Need a name and a valid http(s) URL", true); return; }
+  (sourcesModel[cat] = sourcesModel[cat] || []).push({ name, url, enabled: true, custom: true });
+  $("#add-feed-name").value = ""; $("#add-feed-url").value = "";
+  renderSources();
+});
+
+$("#save-sources").addEventListener("click", async () => {
+  const feeds = {};
+  for (const [cat, entries] of Object.entries(sourcesModel)) {
+    const on = entries.filter((e) => e.enabled).map((e) => ({ name: e.name, url: e.url }));
+    if (on.length) feeds[cat] = on;
+  }
+  if (!Object.keys(feeds).length) { toast("Enable at least one source", true); return; }
+  try {
+    const res = await api("/api/feeds", { method: "PUT", body: JSON.stringify({ feeds }) });
+    toast(`Sources saved — ${res.feed_count} feeds active`);
+    loadSettings();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
 // ── settings ─────────────────────────────────
 
 async function loadSettings() {
+  loadSources();
   const cfg = await api("/api/config");
   const p = cfg.parsed;
   const s = p.scoring || {};

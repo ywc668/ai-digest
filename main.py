@@ -197,7 +197,10 @@ async def _run_pipeline(
     store.mark_seen_batch(all_new_ids)
     store.prune(
         seen_retention_days=state_config.get("retention_days", 30),
-        item_retention_days=state_config.get("item_retention_days", 90),
+        low_score_retention_days=state_config.get(
+            "low_score_retention_days", state_config.get("item_retention_days", 90)
+        ),
+        low_score_threshold=state_config.get("low_score_threshold", 6),
     )
 
     # 9. Compose digest HTML (always saved locally; email optional)

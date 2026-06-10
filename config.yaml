@@ -1,143 +1,128 @@
-# AI Research Digest v3 Configuration
-# ──────────────────────────────────────────────
-# Default backend is local Ollama (free). Switch scoring.backend to
-# "anthropic" to use the Claude API (costs money, needs ANTHROPIC_API_KEY).
+interest_profile: 'I am a software engineer focused on cloud infrastructure, Kubernetes, and DevOps,
 
-# ── Interest Profile ──────────────────────────
-interest_profile: |
-  I am a software engineer focused on cloud infrastructure, Kubernetes, and DevOps,
   transitioning toward ML/AI infrastructure roles. My core interests are:
 
+
   HIGH PRIORITY:
+
   - LLM inference optimization (vLLM, TensorRT-LLM, SGLang, PagedAttention)
+
   - AI agent frameworks and agentic systems (MCP, LangGraph, tool use, multi-agent)
+
   - ML infrastructure and MLOps (Ray, model serving, GPU scheduling, training pipelines)
+
   - Distributed systems for AI (inference at scale, KV cache, speculative decoding)
+
   - Open-source AI models and releases (new model architectures, benchmarks, weights)
 
+
   MEDIUM PRIORITY:
+
   - Kubernetes and cloud-native infrastructure innovations
+
   - DevOps automation and AI-assisted development tools
+
   - Transformer architecture research and improvements
+
   - RLHF, alignment, and safety research
+
   - Retrieval-augmented generation (RAG) systems
 
+
   LOW PRIORITY (still interesting):
+
   - General AI industry news and company announcements
+
   - Programming language developments (Rust, Go, C++)
+
   - Hardware for AI (GPUs, TPUs, custom silicon)
 
-# ── Scoring Settings ──────────────────────────
+  '
 scoring:
-  # Backend: "ollama" (local, free) or "anthropic" (Claude API, paid)
-  backend: "ollama"
-
+  backend: ollama
   ollama:
-    model: "qwen3.6:latest"
-    base_url: "http://localhost:11434"
+    model: qwen3.6:latest
+    base_url: http://localhost:11434
     max_concurrent: 4
-
   anthropic:
-    model: "claude-sonnet-4-20250514"
-    # Rate limit protection (your API limit is 50 req/min, we use 40 with buffer)
+    model: claude-sonnet-4-20250514
     requests_per_minute: 40
-    max_concurrent: 2     # Only 2 items scored in parallel
-
-  # Progressive filtering thresholds
-  stage1_threshold: 3     # Title-only screen: drop < 3
-  stage2_threshold: 5     # Title+summary: this is min_score for digest
-  stage3_threshold: 7     # Full analysis: only for score >= 7
-
+    max_concurrent: 2
+  stage1_threshold: 3
+  stage2_threshold: 5
+  stage3_threshold: 7
   min_score: 5
   max_items: 15
-  # Cap total items sent to scoring (prevents marathon runs on large feeds)
   max_items_to_score: 150
-
-# ── Dedup Settings ────────────────────────────
 dedup:
   title_similarity_threshold: 0.7
   cross_source: true
-
-# ── Pre-scoring Filters ───────────────────────
 filters:
-  # Drop patch/pre-releases from GitHub feeds (v4.41.2, v1.3.0rc12, betas).
-  # Major/minor releases (v1.3.0, v0.22.0, v25.10) are kept.
   skip_patch_releases: true
-
-# ── Feed Sources ──────────────────────────────
-# arXiv cs.AI+cs.LG combined can produce 200+ items/day. We keep only
-# cs.LG (ML, most relevant) and cs.CL (NLP). With the free Ollama backend
-# you can add back cs.AI, cs.DC, cs.SE — the only cost is run time.
 feeds:
   arxiv:
-    - name: "arXiv — Machine Learning"
-      url: "https://rss.arxiv.org/rss/cs.LG"
-    - name: "arXiv — Computation and Language"
-      url: "https://rss.arxiv.org/rss/cs.CL"
-
+  - name: arXiv — Machine Learning
+    url: https://rss.arxiv.org/rss/cs.LG
+  - name: arXiv — Computation and Language
+    url: https://rss.arxiv.org/rss/cs.CL
+  - name: arXiv — Artificial Intelligence
+    url: https://rss.arxiv.org/rss/cs.AI
   blogs:
-    - name: "Lilian Weng"
-      url: "https://lilianweng.github.io/index.xml"
-    - name: "Simon Willison"
-      url: "https://simonwillison.net/atom/everything/"
-    - name: "Chip Huyen"
-      url: "https://huyenchip.com/feed.xml"
-    - name: "Jay Alammar"
-      url: "https://jalammar.github.io/feed.xml"
-    - name: "The Gradient"
-      url: "https://thegradient.pub/rss/"
-    - name: "Kaitchup (ML/LLM quantization)"
-      url: "https://kaitchup.substack.com/feed"
-
+  - name: Lilian Weng
+    url: https://lilianweng.github.io/index.xml
+  - name: Simon Willison
+    url: https://simonwillison.net/atom/everything/
+  - name: Chip Huyen
+    url: https://huyenchip.com/feed.xml
+  - name: Jay Alammar
+    url: https://jalammar.github.io/feed.xml
+  - name: The Gradient
+    url: https://thegradient.pub/rss/
+  - name: Kaitchup (ML/LLM quantization)
+    url: https://kaitchup.substack.com/feed
   labs:
-    - name: "Anthropic Research"
-      url: "https://www.anthropic.com/research/rss.xml"
-    - name: "OpenAI Blog"
-      url: "https://openai.com/blog/rss.xml"
-    - name: "Hugging Face Blog"
-      url: "https://huggingface.co/blog/feed.xml"
-
+  - name: Anthropic Research
+    url: https://www.anthropic.com/research/rss.xml
+  - name: OpenAI Blog
+    url: https://openai.com/blog/rss.xml
+  - name: Hugging Face Blog
+    url: https://huggingface.co/blog/feed.xml
   github:
-    - name: "vLLM releases"
-      url: "https://github.com/vllm-project/vllm/releases.atom"
-    - name: "SGLang releases"
-      url: "https://github.com/sgl-project/sglang/releases.atom"
-    - name: "llama.cpp releases"
-      url: "https://github.com/ggerganov/llama.cpp/releases.atom"
-    - name: "Ollama releases"
-      url: "https://github.com/ollama/ollama/releases.atom"
-    - name: "Transformers releases"
-      url: "https://github.com/huggingface/transformers/releases.atom"
-    - name: "OpenHands releases"
-      url: "https://github.com/All-Hands-AI/OpenHands/releases.atom"
-    - name: "TensorRT-LLM releases"
-      url: "https://github.com/NVIDIA/TensorRT-LLM/releases.atom"
-    - name: "MCP spec releases"
-      url: "https://github.com/modelcontextprotocol/specification/releases.atom"
-
+  - name: vLLM releases
+    url: https://github.com/vllm-project/vllm/releases.atom
+  - name: SGLang releases
+    url: https://github.com/sgl-project/sglang/releases.atom
+  - name: llama.cpp releases
+    url: https://github.com/ggerganov/llama.cpp/releases.atom
+  - name: Ollama releases
+    url: https://github.com/ollama/ollama/releases.atom
+  - name: Transformers releases
+    url: https://github.com/huggingface/transformers/releases.atom
+  - name: OpenHands releases
+    url: https://github.com/All-Hands-AI/OpenHands/releases.atom
+  - name: TensorRT-LLM releases
+    url: https://github.com/NVIDIA/TensorRT-LLM/releases.atom
+  - name: MCP spec releases
+    url: https://github.com/modelcontextprotocol/specification/releases.atom
   newsletters:
-    - name: "The Batch (Andrew Ng)"
-      url: "https://www.deeplearning.ai/the-batch/feed/"
-    - name: "Ahead of AI (Sebastian Raschka)"
-      url: "https://magazine.sebastianraschka.com/feed"
-    - name: "Latent Space"
-      url: "https://www.latent.space/feed"
-    - name: "Interconnects (Nathan Lambert)"
-      url: "https://www.interconnects.ai/feed"
-
+  - name: The Batch (Andrew Ng)
+    url: https://www.deeplearning.ai/the-batch/feed/
+  - name: Ahead of AI (Sebastian Raschka)
+    url: https://magazine.sebastianraschka.com/feed
+  - name: Latent Space
+    url: https://www.latent.space/feed
+  - name: Interconnects (Nathan Lambert)
+    url: https://www.interconnects.ai/feed
   podcasts:
-    - name: "Practical AI"
-      url: "https://changelog.com/practicalai/feed"
-
-# ── Email Settings ────────────────────────────
+  - name: Practical AI
+    url: https://changelog.com/practicalai/feed
 email:
-  enabled: false          # dashboard is the primary surface; flip on to restore email
-  subject_prefix: "AI Digest"
-  sender_name: "AI Research Digest"
-
-# ── State Management ──────────────────────────
+  enabled: false
+  subject_prefix: AI Digest
+  sender_name: AI Research Digest
 state:
-  retention_days: 30          # how long to remember seen item ids (dedup)
-  item_retention_days: 90     # how long to keep unstarred items in the archive
-  state_file: "state.json"    # legacy; migrated into digest.db on first run
-  db_file: "digest.db"
+  retention_days: 30
+  low_score_retention_days: 90
+  low_score_threshold: 6
+  state_file: state.json
+  db_file: digest.db

@@ -109,13 +109,14 @@ CATEGORY_LABELS = {
     "labs": "Lab & company blogs",
     "github": "GitHub releases",
     "newsletters": "Newsletters & digests",
+    "community": "Community",
     "podcasts": "Podcasts",
 }
 
 
 def _group_items_by_category(items: list[FeedItem]) -> dict[str, list[FeedItem]]:
     grouped = {}
-    order = ["arxiv", "blogs", "labs", "github", "newsletters", "podcasts"]
+    order = ["arxiv", "blogs", "labs", "github", "newsletters", "community", "podcasts"]
     for category in order:
         cat_items = [i for i in items if i.source_category == category]
         if cat_items:

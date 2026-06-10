@@ -139,19 +139,38 @@ class Store:
         )
         self.conn.commit()
 
-    def prune(self, seen_retention_days: int = 30, item_retention_days: int = 90) -> None:
+    def prune(
+        self,
+        seen_retention_days: int = 30,
+        low_score_retention_days: int = 90,
+        low_score_threshold: float = 6,
+    ) -> None:
+        """Rotate out stale data.
+
+        seen ids expire after seen_retention_days (an item refetched later than
+        that is treated as new again). Archived items scored below
+        low_score_threshold — including unscored/skipped ones — are deleted
+        after low_score_retention_days unless starred. Items at or above the
+        threshold, and starred items, are kept indefinitely.
+        """
         now = datetime.now(timezone.utc)
         seen_cutoff = (now - timedelta(days=seen_retention_days)).isoformat()
-        item_cutoff = (now - timedelta(days=item_retention_days)).isoformat()
+        item_cutoff = (now - timedelta(days=low_score_retention_days)).isoformat()
         cur = self.conn.execute("DELETE FROM seen WHERE seen_at < ?", (seen_cutoff,))
         n_seen = cur.rowcount
         cur = self.conn.execute(
-            "DELETE FROM items WHERE first_seen < ? AND starred = 0", (item_cutoff,)
+            """DELETE FROM items
+               WHERE first_seen < ? AND starred = 0
+                 AND COALESCE(score, 0) < ?""",
+            (item_cutoff, low_score_threshold),
         )
         n_items = cur.rowcount
         self.conn.commit()
         if n_seen or n_items:
-            logger.info(f"Pruned {n_seen} seen ids, {n_items} old items")
+            logger.info(
+                f"Pruned {n_seen} seen ids, {n_items} low-scored items "
+                f"(score<{low_score_threshold}, older than {low_score_retention_days}d)"
+            )
 
     # ── Items ─────────────────────────────────────
 

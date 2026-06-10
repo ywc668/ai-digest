@@ -268,6 +268,53 @@ async def patch_config(req: ConfigPatch):
     return {"ok": True, "parsed": parsed}
 
 
+# ── Source catalog & feeds ────────────────────────────────────
+
+CATALOG_PATH = BASE_DIR / "catalog.yaml"
+
+
+@app.get("/api/catalog")
+async def get_catalog():
+    """Curated optional sources + which feed URLs are currently enabled."""
+    catalog = yaml.safe_load(CATALOG_PATH.read_text()) if CATALOG_PATH.exists() else {}
+    config = yaml.safe_load(CONFIG_PATH.read_text())
+    enabled = {
+        feed["url"]: feed["name"]
+        for feeds in (config.get("feeds") or {}).values()
+        for feed in feeds
+    }
+    return {"catalog": catalog, "enabled": enabled}
+
+
+class FeedsPut(BaseModel):
+    """Full replacement of the feeds section: {category: [{name, url}, ...]}"""
+    feeds: dict
+
+
+@app.put("/api/feeds")
+async def put_feeds(req: FeedsPut):
+    if not req.feeds or not isinstance(req.feeds, dict):
+        raise HTTPException(400, "feeds must be a non-empty mapping")
+    for category, feeds in req.feeds.items():
+        if not isinstance(feeds, list):
+            raise HTTPException(400, f"feeds.{category} must be a list")
+        for feed in feeds:
+            if not isinstance(feed, dict) or not feed.get("name") or not feed.get("url"):
+                raise HTTPException(400, f"every feed in {category} needs name and url")
+            if not str(feed["url"]).startswith(("http://", "https://")):
+                raise HTTPException(400, f"invalid url: {feed['url']}")
+    parsed = yaml.safe_load(CONFIG_PATH.read_text())
+    parsed["feeds"] = {
+        cat: [{"name": f["name"], "url": f["url"]} for f in feeds]
+        for cat, feeds in req.feeds.items() if feeds
+    }
+    CONFIG_PATH.write_text(
+        yaml.safe_dump(parsed, sort_keys=False, allow_unicode=True, width=100)
+    )
+    n = sum(len(v) for v in parsed["feeds"].values())
+    return {"ok": True, "feed_count": n}
+
+
 # ── Static frontend ───────────────────────────────────────────
 
 @app.get("/")

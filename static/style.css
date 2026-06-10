@@ -335,6 +335,34 @@ mark {
 .raw-editor { width: 100%; margin-bottom: 12px; }
 .hint { font-size: 12px; color: var(--ink-faint); font-family: var(--serif); font-style: italic; }
 
+/* ── Sources editor ────────────────────────── */
+.sources-groups {
+  columns: 2; column-gap: 36px; margin: 14px 0 18px;
+}
+@media (max-width: 860px) { .sources-groups { columns: 1; } }
+.source-group { break-inside: avoid; margin-bottom: 20px; }
+.source-group-head {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--accent); margin: 0 0 8px;
+  border-bottom: 1px solid var(--rule); padding-bottom: 4px;
+}
+.source-row {
+  display: flex; align-items: baseline; gap: 9px; cursor: pointer;
+  padding: 4px 2px; font-size: 14.5px; color: var(--ink-soft);
+}
+.source-row.on { color: var(--ink); }
+.source-row input { accent-color: var(--accent); }
+.source-name { flex: 1; }
+.source-url { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+.add-feed-row {
+  display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px;
+}
+.add-feed-row select, .add-feed-row input {
+  background: var(--card); border: 1px solid var(--rule); color: var(--ink);
+  font-family: var(--mono); font-size: 12.5px; padding: 8px 10px; outline: none;
+}
+.add-feed-row input[type="url"] { flex: 1; min-width: 220px; }
+
 /* ── Colophon, toast ───────────────────────── */
 .colophon {
   max-width: 980px; margin: 0 auto; padding: 18px 24px 36px;

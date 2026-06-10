@@ -97,6 +97,27 @@
 
   <!-- ── SETTINGS ───────────────────────────────────────── -->
   <section id="panel-settings" class="panel" hidden>
+    <h2 class="section-head">Sources</h2>
+    <p class="hint">Tick the sources you want in your digest. Curated entries are
+      pre-verified; add anything else as a custom feed. Changes apply on save and
+      take effect next run.</p>
+    <div id="sources-groups" class="sources-groups"></div>
+    <div class="add-feed-row">
+      <select id="add-feed-cat">
+        <option value="arxiv">arxiv</option>
+        <option value="blogs">blogs</option>
+        <option value="labs">labs</option>
+        <option value="github">github</option>
+        <option value="newsletters">newsletters</option>
+        <option value="community">community</option>
+        <option value="podcasts">podcasts</option>
+      </select>
+      <input id="add-feed-name" type="text" placeholder="Source name">
+      <input id="add-feed-url" type="url" placeholder="https://…/feed.xml">
+      <button id="add-feed-btn" class="ctl-toggle">+ add custom</button>
+    </div>
+    <button id="save-sources" class="save-button">Save sources</button>
+
     <div class="settings-grid">
       <div class="settings-col">
         <h2 class="section-head">Quick controls</h2>
