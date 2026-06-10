@@ -9,10 +9,11 @@ PYTHON="$DIGEST_DIR/.venv/bin/python"
 AGENTS="$HOME/Library/LaunchAgents"
 mkdir -p "$AGENTS"
 
+# Email on/off is governed by email.enabled in config.yaml (no --no-email here).
 cat > "$DIGEST_DIR/scripts/daily_job.sh" <<EOF
 #!/bin/zsh
 cd "$DIGEST_DIR"
-"$PYTHON" main.py --no-email && "$PYTHON" scripts/generate_report.py daily
+"$PYTHON" main.py && "$PYTHON" scripts/generate_report.py daily
 EOF
 chmod +x "$DIGEST_DIR/scripts/daily_job.sh"
 
