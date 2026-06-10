@@ -69,6 +69,38 @@ CREATE TABLE IF NOT EXISTS runs (
     error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,            -- daily | weekly
+    period_start TEXT,
+    period_end TEXT,
+    created TEXT NOT NULL,
+    status TEXT DEFAULT 'building',-- building | ready | error
+    content_md TEXT,
+    model TEXT,
+    error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS stories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    prompt TEXT NOT NULL,
+    abstract TEXT,
+    status TEXT DEFAULT 'building',-- building | ready | error
+    error TEXT,
+    created TEXT NOT NULL,
+    updated TEXT
+);
+
+CREATE TABLE IF NOT EXISTS story_items (
+    story_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    relevance REAL,
+    note TEXT,
+    added TEXT,
+    PRIMARY KEY (story_id, item_id)
+);
+
 CREATE TABLE IF NOT EXISTS usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER,
@@ -98,9 +130,14 @@ class Store:
 
     def _migrate_schema(self) -> None:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(items)")}
-        if "highlights" not in cols:
-            self.conn.execute("ALTER TABLE items ADD COLUMN highlights TEXT")
-            self.conn.commit()
+        for col, decl in [
+            ("highlights", "TEXT"),
+            ("topic", "TEXT"),
+            ("deep_dive", "TEXT"),   # cached JSON from the dig-deeper analysis
+        ]:
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {decl}")
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
@@ -183,7 +220,7 @@ class Store:
                 it.published.isoformat() if it.published else None,
                 json.dumps(it.authors), json.dumps(it.tags[:15]),
                 it.score, it.score_reason, it.score_stage,
-                json.dumps(it.highlights), run_id, now,
+                json.dumps(it.highlights), it.topic, run_id, now,
             )
             for it in items
         ]
@@ -191,12 +228,12 @@ class Store:
             """INSERT INTO items
                (id, title, url, summary, source_name, source_category, published,
                 authors, tags, score, score_reason, score_stage, highlights,
-                run_id, first_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                topic, run_id, first_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  score=excluded.score, score_reason=excluded.score_reason,
                  score_stage=excluded.score_stage, highlights=excluded.highlights,
-                 run_id=excluded.run_id""",
+                 topic=excluded.topic, run_id=excluded.run_id""",
             rows,
         )
         self.conn.commit()
@@ -222,6 +259,7 @@ class Store:
         *,
         search: Optional[str] = None,
         category: Optional[str] = None,
+        topic: Optional[str] = None,
         source: Optional[str] = None,
         min_score: Optional[float] = None,
         stage: Optional[str] = None,
@@ -242,6 +280,9 @@ class Store:
         if category:
             where.append("source_category = ?")
             params.append(category)
+        if topic:
+            where.append("topic = ?")
+            params.append(topic)
         if source:
             where.append("source_name = ?")
             params.append(source)
@@ -288,8 +329,152 @@ class Store:
             d["authors"] = json.loads(d["authors"] or "[]")
             d["tags"] = json.loads(d["tags"] or "[]")
             d["highlights"] = json.loads(d["highlights"] or "[]")
+            d["deep_dive"] = json.loads(d["deep_dive"]) if d.get("deep_dive") else None
             items.append(d)
         return {"total": total, "items": items}
+
+    def topic_counts(self) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT topic, COUNT(*) AS n FROM items
+               WHERE topic IS NOT NULL AND hidden = 0
+               GROUP BY topic ORDER BY n DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_item_json(self, item_id: str, field: str, payload: dict) -> None:
+        if field not in ("deep_dive",):
+            raise ValueError(f"Invalid json field: {field}")
+        self.conn.execute(
+            f"UPDATE items SET {field} = ? WHERE id = ?",
+            (json.dumps(payload), item_id),
+        )
+        self.conn.commit()
+
+    def get_item(self, item_id: str) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["authors"] = json.loads(d["authors"] or "[]")
+        d["tags"] = json.loads(d["tags"] or "[]")
+        d["highlights"] = json.loads(d["highlights"] or "[]")
+        return d
+
+    # ── Stories ───────────────────────────────────
+
+    def create_story(self, prompt: str, title: str = "") -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self.conn.execute(
+            "INSERT INTO stories (title, prompt, status, created) VALUES (?, ?, 'building', ?)",
+            (title, prompt, now),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_story(self, story_id: int, **fields) -> None:
+        allowed = {"title", "abstract", "status", "error"}
+        sets, params = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                raise ValueError(f"Invalid story field: {k}")
+            sets.append(f"{k} = ?")
+            params.append(v)
+        sets.append("updated = ?")
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.append(story_id)
+        self.conn.execute(f"UPDATE stories SET {', '.join(sets)} WHERE id = ?", params)
+        self.conn.commit()
+
+    def set_story_items(self, story_id: int, links: list[dict]) -> None:
+        """links: [{item_id, relevance, note}] — replaces existing links."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute("DELETE FROM story_items WHERE story_id = ?", (story_id,))
+        self.conn.executemany(
+            """INSERT OR REPLACE INTO story_items (story_id, item_id, relevance, note, added)
+               VALUES (?, ?, ?, ?, ?)""",
+            [(story_id, l["item_id"], l.get("relevance"), l.get("note", ""), now) for l in links],
+        )
+        self.conn.commit()
+
+    def list_stories(self) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT s.*, COUNT(si.item_id) AS item_count
+               FROM stories s LEFT JOIN story_items si ON si.story_id = s.id
+               GROUP BY s.id ORDER BY s.id DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_story(self, story_id: int) -> Optional[dict]:
+        s = self.conn.execute("SELECT * FROM stories WHERE id = ?", (story_id,)).fetchone()
+        if not s:
+            return None
+        items = self.conn.execute(
+            """SELECT i.*, si.relevance AS story_relevance, si.note AS story_note
+               FROM story_items si JOIN items i ON i.id = si.item_id
+               WHERE si.story_id = ?
+               ORDER BY COALESCE(i.published, i.first_seen) ASC""",
+            (story_id,),
+        ).fetchall()
+        out = dict(s)
+        out["items"] = []
+        for r in items:
+            d = dict(r)
+            d["authors"] = json.loads(d["authors"] or "[]")
+            d["tags"] = json.loads(d["tags"] or "[]")
+            d["highlights"] = json.loads(d["highlights"] or "[]")
+            out["items"].append(d)
+        return out
+
+    def delete_story(self, story_id: int) -> None:
+        self.conn.execute("DELETE FROM story_items WHERE story_id = ?", (story_id,))
+        self.conn.execute("DELETE FROM stories WHERE id = ?", (story_id,))
+        self.conn.commit()
+
+    def search_candidates(self, keywords: list[str], limit: int = 200) -> list[dict]:
+        """Items matching ANY keyword in title/summary/tags — story candidates."""
+        if not keywords:
+            return []
+        clauses, params = [], []
+        for kw in keywords[:10]:
+            like = f"%{kw}%"
+            clauses.append("(title LIKE ? OR summary LIKE ? OR tags LIKE ?)")
+            params += [like, like, like]
+        rows = self.conn.execute(
+            f"""SELECT id, title, summary, source_name, source_category, published, score
+                FROM items WHERE hidden = 0 AND ({' OR '.join(clauses)})
+                ORDER BY COALESCE(published, first_seen) DESC LIMIT ?""",
+            params + [limit],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Reports ───────────────────────────────────
+
+    def create_report(self, kind: str, period_start: str, period_end: str, model: str) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO reports (kind, period_start, period_end, created, status, model)
+               VALUES (?, ?, ?, ?, 'building', ?)""",
+            (kind, period_start, period_end, datetime.now(timezone.utc).isoformat(), model),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def finish_report(self, report_id: int, content_md: str = None, error: str = None) -> None:
+        self.conn.execute(
+            "UPDATE reports SET status = ?, content_md = ?, error = ? WHERE id = ?",
+            ("error" if error else "ready", content_md, error, report_id),
+        )
+        self.conn.commit()
+
+    def list_reports(self, limit: int = 30) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, kind, period_start, period_end, created, status, model, error "
+            "FROM reports ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_report(self, report_id: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+        return dict(r) if r else None
 
     def list_sources(self) -> list[dict]:
         rows = self.conn.execute(

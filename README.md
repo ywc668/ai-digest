@@ -64,14 +64,23 @@ Or run the pipeline headless:
 
 ## The dashboard
 
-- **Today / Archive** — the scored feed: search, category chips, sort by score/date,
-  min-score slider, star ★ / hide ✕, expandable summaries with **key phrases
-  highlighted**, visible source link per item, stage badges. The date window
-  filters on the item's **published date** (fetch date only as fallback).
+- **Today / Archive** — the scored feed: search, category *and topic* chips, sort by
+  score/date, min-score slider, star ★ / hide ✕, expandable summaries with **key
+  phrases highlighted**, visible source link per item, stage badges, and a
+  **dig deeper ⛏** button that fetches the full article and produces a cached deep
+  analysis (what it is, implications, how to try it). The date window filters on the
+  item's **published date** (fetch date only as fallback).
+- **Stories** — user-initiated cross-source threads: describe what you want to follow
+  ("how Anthropic is investing in AI security") and the archive is mined into a
+  timeline with an LLM-written abstract; refresh after runs to extend it.
+- **Reports** — generated daily/weekly markdown briefs (top developments, by-topic,
+  worth-your-time, radar). The launchd cron generates these automatically.
 - **Runs & Tokens** — run history, per-stage token ledger, live pipeline log.
-- **Settings** — backend switch (ollama ⇄ anthropic), thresholds, digest size,
-  interest profile editor, plus a raw `config.yaml` editor for full control
-  (feeds, dedup, retention).
+- **Settings** — source toggles (42-entry curated catalog + custom feeds), backend
+  switch (ollama ⇄ anthropic), thresholds, digest size, interest profile editor with
+  an **LLM assistant** (type "more AI safety, drop hardware" → proposed rewrite, or
+  run a 5-question interview to draft it from scratch), plus a raw `config.yaml`
+  editor for full control.
 
 ## Configuration (`config.yaml`)
 
@@ -84,32 +93,17 @@ Or run the pipeline headless:
   v1.3.0rc12) before scoring; major/minor releases (v1.3.0, v25.10) are kept.
 - `email.enabled` — flip on to also receive the HTML email (needs `SMTP_*` env vars).
 
-## Scheduling a daily local run
-
-Either click **Run now** each morning, or install a launchd job (runs at next wake if
-the Mac was asleep):
+## Scheduling (cron)
 
 ```bash
-cat > ~/Library/LaunchAgents/com.ai-digest.daily.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.ai-digest.daily</string>
-  <key>ProgramArguments</key><array>
-    <string>$(pwd)/.venv/bin/python</string>
-    <string>$(pwd)/main.py</string>
-    <string>--no-email</string>
-  </array>
-  <key>WorkingDirectory</key><string>$(pwd)</string>
-  <key>StartCalendarInterval</key><dict>
-    <key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer>
-  </dict>
-  <key>StandardOutPath</key><string>/tmp/ai-digest.log</string>
-  <key>StandardErrorPath</key><string>/tmp/ai-digest.log</string>
-</dict></plist>
-EOF
-launchctl load ~/Library/LaunchAgents/com.ai-digest.daily.plist
+./scripts/install_cron.sh
 ```
+
+Installs two launchd jobs (they run at next wake if the Mac was asleep):
+- **Daily 7:00** — pipeline run + daily report (`/tmp/ai-digest-daily.log`)
+- **Sunday 17:00** — weekly report (`/tmp/ai-digest-weekly.log`)
+
+Uninstall: `launchctl unload ~/Library/LaunchAgents/com.ai-digest.*.plist && rm ~/Library/LaunchAgents/com.ai-digest.*.plist`
 
 ## Project structure
 

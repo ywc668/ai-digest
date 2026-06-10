@@ -132,6 +132,7 @@ async def run_status(tail: int = 40):
 async def list_items(
     search: Optional[str] = None,
     category: Optional[str] = None,
+    topic: Optional[str] = None,
     source: Optional[str] = None,
     min_score: Optional[float] = None,
     stage: Optional[str] = None,
@@ -147,7 +148,7 @@ async def list_items(
     store = get_store()
     try:
         return store.query_items(
-            search=search, category=category, source=source, min_score=min_score,
+            search=search, category=category, topic=topic, source=source, min_score=min_score,
             stage=stage, starred=starred, include_hidden=include_hidden,
             days=days, run_id=run_id, sort=sort, order=order,
             limit=min(limit, 500), offset=offset,
@@ -182,6 +183,206 @@ async def list_sources():
         return store.list_sources()
     finally:
         store.close()
+
+
+@app.get("/api/topics")
+async def list_topics():
+    config = yaml.safe_load(CONFIG_PATH.read_text())
+    store = get_store()
+    try:
+        counts = {r["topic"]: r["n"] for r in store.topic_counts()}
+    finally:
+        store.close()
+    return [
+        {"topic": t, "count": counts.get(t, 0)}
+        for t in config.get("topics", [])
+    ]
+
+
+# ── Intelligence: profile assistant, dig deeper ───────────────
+
+def _scoring_config() -> dict:
+    return yaml.safe_load(CONFIG_PATH.read_text())["scoring"]
+
+
+class ProfileAssistRequest(BaseModel):
+    mode: str  # edit | questions | draft
+    instruction: str = ""
+    answers: Optional[list] = None
+
+
+@app.post("/api/profile/assist")
+async def profile_assist(req: ProfileAssistRequest):
+    from intelligence import assist_profile
+    config = yaml.safe_load(CONFIG_PATH.read_text())
+    try:
+        return await assist_profile(
+            config["scoring"], config.get("interest_profile", ""),
+            req.mode, req.instruction, req.answers,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("profile assist failed")
+        raise HTTPException(502, f"LLM call failed: {type(e).__name__}")
+
+
+@app.post("/api/items/{item_id}/dig")
+async def dig_item(item_id: str, force: bool = False):
+    from intelligence import dig_deeper
+    store = get_store()
+    try:
+        item = store.get_item(item_id)
+        if not item:
+            raise HTTPException(404, "Item not found")
+        if item.get("deep_dive") and not force:
+            import json as _json
+            return _json.loads(item["deep_dive"])
+        result = await dig_deeper(_scoring_config(), item)
+        store.set_item_json(item_id, "deep_dive", result)
+        return result
+    finally:
+        store.close()
+
+
+# ── Stories ───────────────────────────────────────────────────
+
+class StoryCreate(BaseModel):
+    prompt: str
+
+
+@app.post("/api/stories")
+async def create_story(req: StoryCreate):
+    from intelligence import build_story
+    if not req.prompt.strip():
+        raise HTTPException(400, "Story prompt required")
+    store = get_store()
+    story_id = store.create_story(req.prompt.strip())
+    store.close()
+
+    async def _build():
+        s = get_store()
+        try:
+            await build_story(_scoring_config(), s, story_id, req.prompt.strip())
+        finally:
+            s.close()
+
+    asyncio.create_task(_build())
+    return {"id": story_id, "status": "building"}
+
+
+@app.post("/api/stories/{story_id}/refresh")
+async def refresh_story(story_id: int):
+    from intelligence import build_story
+    store = get_store()
+    story = store.get_story(story_id)
+    if not story:
+        store.close()
+        raise HTTPException(404, "Story not found")
+    store.update_story(story_id, status="building", error=None)
+    store.close()
+
+    async def _build():
+        s = get_store()
+        try:
+            await build_story(_scoring_config(), s, story_id, story["prompt"])
+        finally:
+            s.close()
+
+    asyncio.create_task(_build())
+    return {"id": story_id, "status": "building"}
+
+
+@app.get("/api/stories")
+async def list_stories():
+    store = get_store()
+    try:
+        return store.list_stories()
+    finally:
+        store.close()
+
+
+@app.get("/api/stories/{story_id}")
+async def get_story(story_id: int):
+    store = get_store()
+    try:
+        story = store.get_story(story_id)
+    finally:
+        store.close()
+    if not story:
+        raise HTTPException(404, "Story not found")
+    return story
+
+
+@app.delete("/api/stories/{story_id}")
+async def delete_story(story_id: int):
+    store = get_store()
+    try:
+        store.delete_story(story_id)
+    finally:
+        store.close()
+    return {"ok": True}
+
+
+# ── Reports ───────────────────────────────────────────────────
+
+class ReportCreate(BaseModel):
+    kind: str = "weekly"  # daily | weekly
+
+
+@app.post("/api/reports")
+async def create_report(req: ReportCreate):
+    from datetime import datetime, timedelta, timezone
+    from intelligence import generate_report
+    if req.kind not in ("daily", "weekly"):
+        raise HTTPException(400, "kind must be daily or weekly")
+    days = 1 if req.kind == "daily" else 7
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=days)).isoformat()
+    config = yaml.safe_load(CONFIG_PATH.read_text())
+    model = config["scoring"].get("ollama", {}).get("model", "?") \
+        if config["scoring"].get("backend") == "ollama" \
+        else config["scoring"].get("anthropic", {}).get("model", "?")
+
+    store = get_store()
+    report_id = store.create_report(req.kind, start, now.isoformat(), model)
+    items = store.query_items(days=days, min_score=5, sort="score", limit=40)["items"]
+    store.close()
+
+    async def _gen():
+        s = get_store()
+        try:
+            md = await generate_report(config["scoring"], items, req.kind, start, now.isoformat())
+            s.finish_report(report_id, content_md=md)
+        except Exception as e:
+            logger.exception("report generation failed")
+            s.finish_report(report_id, error=f"{type(e).__name__}: {e}")
+        finally:
+            s.close()
+
+    asyncio.create_task(_gen())
+    return {"id": report_id, "status": "building"}
+
+
+@app.get("/api/reports")
+async def list_reports():
+    store = get_store()
+    try:
+        return store.list_reports()
+    finally:
+        store.close()
+
+
+@app.get("/api/reports/{report_id}")
+async def get_report(report_id: int):
+    store = get_store()
+    try:
+        r = store.get_report(report_id)
+    finally:
+        store.close()
+    if not r:
+        raise HTTPException(404, "Report not found")
+    return r
 
 
 # ── Runs / usage / stats ──────────────────────────────────────

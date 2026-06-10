@@ -14,6 +14,7 @@ const state = {
   tab: "today",
   search: "",
   category: "",
+  topic: "",
   sort: "score",
   days: "1",
   minScore: 5,
@@ -113,6 +114,7 @@ function feedQuery() {
   const p = new URLSearchParams();
   if (state.search) p.set("search", state.search);
   if (state.category) p.set("category", state.category);
+  if (state.topic) p.set("topic", state.topic);
   if (state.minScore > 0 && !state.showRejects) p.set("min_score", state.minScore);
   if (state.starredOnly) p.set("starred", "true");
   if (state.tab === "today" && state.days) p.set("days", state.days);
@@ -153,6 +155,32 @@ function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
+/* Minimal markdown renderer — enough for LLM-generated reports/abstracts. */
+function renderMd(md) {
+  const lines = esc(md || "").split("\n");
+  let html = "", inList = false;
+  const inline = (s) => s
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/\*([^*]+)\*/g, "<i>$1</i>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const bullet = line.match(/^\s*[-*]\s+(.*)/);
+    if (bullet) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${inline(bullet[1])}</li>`;
+      continue;
+    }
+    if (inList) { html += "</ul>"; inList = false; }
+    const h = line.match(/^(#{1,4})\s+(.*)/);
+    if (h) html += `<h${h[1].length + 2}>${inline(h[2])}</h${h[1].length + 2}>`;
+    else if (line.trim()) html += `<p>${inline(line)}</p>`;
+  }
+  if (inList) html += "</ul>";
+  return html;
+}
+
 function renderItem(item, idx) {
   const score = item.score == null ? "·" : Math.round(item.score);
   const stageBadge =
@@ -175,9 +203,14 @@ function renderItem(item, idx) {
         ${host ? ` · <a class="link-out" href="${esc(item.url)}" target="_blank" rel="noopener" title="${esc(item.url)}">${esc(host)} ↗</a>` : ""}${stageBadge}
       </div>
       ${item.score_reason ? `<p class="item-reason">${esc(item.score_reason)}</p>` : ""}
+      ${item.topic ? `<span class="topic-tag">${esc(item.topic)}</span>` : ""}
       ${highlights.length ? `<div class="item-highlights">${highlights.map((h) => `<span class="hl">${esc(h)}</span>`).join("")}</div>` : ""}
-      ${hasSummary ? `<p class="item-summary">${renderSummary(item.summary, highlights)}</p>
-      <button class="item-expand" data-act="expand">read summary +</button>` : ""}
+      ${hasSummary ? `<p class="item-summary">${renderSummary(item.summary, highlights)}</p>` : ""}
+      <div class="item-buttons">
+        ${hasSummary ? `<button class="item-expand" data-act="expand">read summary +</button>` : ""}
+        <button class="item-expand" data-act="dig">${item.deep_dive ? "deep dive ▸" : "dig deeper ⛏"}</button>
+      </div>
+      <div class="dig-panel" hidden></div>
     </div>
     <div class="item-actions">
       <button class="act ${item.starred ? "starred" : ""}" data-act="star" title="Star">${item.starred ? "★" : "☆"}</button>
@@ -209,6 +242,15 @@ function emptyState() {
 
 // ── feed events (delegated) ──────────────────
 
+function renderDig(d) {
+  return `
+    <h4>Analysis ${d.used_full_article ? '<span class="badge deep">full article</span>' : '<span class="badge">from summary</span>'}</h4>
+    <p>${esc(d.analysis || "")}</p>
+    <h4>Implications</h4><p>${esc(d.implications || "")}</p>
+    ${d.try_it ? `<h4>Try it</h4><p>${esc(d.try_it)}</p>` : ""}
+    ${(d.questions || []).length ? `<h4>Dig further</h4><ul>${d.questions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>` : ""}`;
+}
+
 $("#feed").addEventListener("click", async (e) => {
   const btn = e.target.closest("button");
   if (!btn) return;
@@ -218,6 +260,24 @@ $("#feed").addEventListener("click", async (e) => {
   if (act === "expand") {
     itemEl.classList.toggle("open");
     btn.textContent = itemEl.classList.contains("open") ? "collapse −" : "read summary +";
+  } else if (act === "dig") {
+    const panel = itemEl.querySelector(".dig-panel");
+    if (!panel.hidden) { panel.hidden = true; return; }
+    if (panel.dataset.loaded) { panel.hidden = false; return; }
+    btn.disabled = true;
+    btn.textContent = "digging… (fetching article + analyzing)";
+    try {
+      const d = await api(`/api/items/${id}/dig`, { method: "POST" });
+      panel.innerHTML = renderDig(d);
+      panel.dataset.loaded = "1";
+      panel.hidden = false;
+      btn.textContent = "deep dive ▸";
+    } catch (err) {
+      toast(err.message, true);
+      btn.textContent = "dig deeper ⛏";
+    } finally {
+      btn.disabled = false;
+    }
   } else if (act === "star") {
     const on = !btn.classList.contains("starred");
     await api(`/api/items/${id}/flag`, { method: "POST", body: JSON.stringify({ field: "starred", value: on }) });
@@ -245,6 +305,26 @@ $("#category-chips").addEventListener("click", (e) => {
   if (!chip) return;
   state.category = chip.dataset.cat;
   renderChips();
+  loadFeed();
+});
+
+let topicList = [];
+async function renderTopicChips() {
+  if (!topicList.length) {
+    try { topicList = await api("/api/topics"); } catch { return; }
+  }
+  $("#topic-chips").innerHTML =
+    `<button class="chip ${state.topic === "" ? "active" : ""}" data-topic="">All topics</button>` +
+    topicList.filter((t) => t.count > 0 || true).map((t) =>
+      `<button class="chip ${state.topic === t.topic ? "active" : ""}" data-topic="${esc(t.topic)}">${esc(t.topic)}${t.count ? ` <small>${t.count}</small>` : ""}</button>`
+    ).join("");
+}
+
+$("#topic-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  state.topic = chip.dataset.topic;
+  renderTopicChips();
   loadFeed();
 });
 
@@ -287,12 +367,205 @@ $("#tabs").addEventListener("click", (e) => {
   state.tab = tab.dataset.tab;
   $$(".tab").forEach((t) => t.classList.toggle("active", t === tab));
   $("#panel-feed").hidden = !(state.tab === "today" || state.tab === "archive");
+  $("#panel-stories").hidden = state.tab !== "stories";
+  $("#panel-reports").hidden = state.tab !== "reports";
   $("#panel-runs").hidden = state.tab !== "runs";
   $("#panel-settings").hidden = state.tab !== "settings";
   if (state.tab === "today") { state.days = "1"; $("#days").value = "1"; loadFeed(); }
   if (state.tab === "archive") { state.days = ""; $("#days").value = ""; loadFeed(); }
+  if (state.tab === "stories") loadStories();
+  if (state.tab === "reports") loadReports();
   if (state.tab === "runs") loadRuns();
   if (state.tab === "settings") loadSettings();
+});
+
+// ── stories ──────────────────────────────────
+
+let currentStoryId = null;
+let storyPollTimer = null;
+
+async function loadStories(selectId = null) {
+  const stories = await api("/api/stories");
+  $("#story-list").innerHTML = stories.map((s) => `
+    <div class="story-card ${s.id === currentStoryId ? "sel" : ""}" data-id="${s.id}">
+      <div class="story-card-title">${esc(s.title || s.prompt.slice(0, 50))}</div>
+      <div class="story-card-meta">
+        ${s.status === "building" ? "⏳ building…" : s.status === "error" ? "⚠ failed" : `${s.item_count} items`}
+        ${s.updated ? " · " + fmtWhen(s.updated) : ""}
+      </div>
+    </div>`).join("") || `<p class="hint">No stories yet.</p>`;
+  if (selectId) viewStory(selectId);
+  else if (currentStoryId) viewStory(currentStoryId, false);
+}
+
+async function viewStory(id, rerenderList = true) {
+  currentStoryId = id;
+  if (rerenderList) $$("#story-list .story-card").forEach((c) => c.classList.toggle("sel", Number(c.dataset.id) === id));
+  const s = await api(`/api/stories/${id}`);
+  clearInterval(storyPollTimer); storyPollTimer = null;
+  if (s.status === "building") {
+    $("#story-view").innerHTML = `<p class="hint">⏳ Mining the archive and building the timeline… (~30–90s, local model)</p>`;
+    storyPollTimer = setInterval(() => viewStory(id, false), 4000);
+    return;
+  }
+  if (s.status === "error") {
+    $("#story-view").innerHTML = `<p class="hint">⚠ Build failed: ${esc(s.error || "unknown")}</p>
+      <button class="ctl-toggle" id="story-refresh">retry</button>`;
+    $("#story-refresh").onclick = () => refreshStory(id);
+    return;
+  }
+  $("#story-view").innerHTML = `
+    <div class="story-head">
+      <h3 class="story-title">${esc(s.title)}</h3>
+      <div>
+        <button class="ctl-toggle" id="story-refresh" title="Re-scan the archive">↻ refresh</button>
+        <button class="ctl-toggle" id="story-delete">✕ delete</button>
+      </div>
+    </div>
+    <p class="hint">“${esc(s.prompt)}”</p>
+    <div class="story-abstract">${renderMd(s.abstract)}</div>
+    <h4 class="section-head">Timeline — ${s.items.length} items</h4>
+    <div class="timeline">
+      ${s.items.map((i) => `
+        <div class="tl-item">
+          <div class="tl-date">${(i.published || i.first_seen || "").slice(0, 10)}</div>
+          <div class="tl-body">
+            <a href="${esc(i.url)}" target="_blank" rel="noopener" class="tl-title">${esc(i.title)}</a>
+            <div class="tl-meta">${esc(i.source_name)}${i.score ? ` · scored ${Math.round(i.score)}` : ""}${i.story_relevance ? ` · relevance ${Math.round(i.story_relevance)}` : ""}</div>
+            ${i.story_note ? `<div class="tl-note">${esc(i.story_note)}</div>` : ""}
+          </div>
+        </div>`).join("") || "<p class='hint'>No archive items match yet — the story will fill in as new items arrive (hit refresh after runs).</p>"}
+    </div>`;
+  $("#story-refresh").onclick = () => refreshStory(id);
+  $("#story-delete").onclick = async () => {
+    await api(`/api/stories/${id}`, { method: "DELETE" });
+    currentStoryId = null;
+    $("#story-view").innerHTML = `<p class="hint">Select a story.</p>`;
+    loadStories();
+    toast("Story deleted");
+  };
+}
+
+async function refreshStory(id) {
+  await api(`/api/stories/${id}/refresh`, { method: "POST" });
+  viewStory(id, false);
+}
+
+$("#story-list").addEventListener("click", (e) => {
+  const card = e.target.closest(".story-card");
+  if (card) viewStory(Number(card.dataset.id));
+});
+
+$("#story-create-btn").addEventListener("click", async () => {
+  const prompt = $("#story-prompt").value.trim();
+  if (!prompt) { toast("Describe the story first", true); return; }
+  const res = await api("/api/stories", { method: "POST", body: JSON.stringify({ prompt }) });
+  $("#story-prompt").value = "";
+  toast("Story building started");
+  loadStories(res.id);
+});
+
+// ── reports ──────────────────────────────────
+
+let currentReportId = null;
+let reportPollTimer = null;
+
+async function loadReports(selectId = null) {
+  const reports = await api("/api/reports");
+  $("#report-list").innerHTML = reports.map((r) => `
+    <div class="story-card ${r.id === currentReportId ? "sel" : ""}" data-id="${r.id}">
+      <div class="story-card-title">${esc(r.kind)} — ${(r.period_end || r.created).slice(0, 10)}</div>
+      <div class="story-card-meta">${r.status === "building" ? "⏳ building…" : r.status === "error" ? "⚠ failed" : fmtWhen(r.created)}</div>
+    </div>`).join("") || `<p class="hint">No reports yet — generate one above.</p>`;
+  if (selectId) viewReport(selectId);
+}
+
+async function viewReport(id) {
+  currentReportId = id;
+  $$("#report-list .story-card").forEach((c) => c.classList.toggle("sel", Number(c.dataset.id) === id));
+  const r = await api(`/api/reports/${id}`);
+  clearInterval(reportPollTimer); reportPollTimer = null;
+  if (r.status === "building") {
+    $("#report-view").innerHTML = `<p class="hint">⏳ Synthesizing report… (~20–60s)</p>`;
+    reportPollTimer = setInterval(() => { viewReport(id); loadReports(); }, 4000);
+    return;
+  }
+  $("#report-view").innerHTML = r.status === "error"
+    ? `<p class="hint">⚠ ${esc(r.error || "failed")}</p>`
+    : `<div class="story-abstract">${renderMd(r.content_md)}</div>`;
+}
+
+$("#report-list").addEventListener("click", (e) => {
+  const card = e.target.closest(".story-card");
+  if (card) viewReport(Number(card.dataset.id));
+});
+
+$("#panel-reports .report-actions").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-report-kind]");
+  if (!btn) return;
+  const res = await api("/api/reports", { method: "POST", body: JSON.stringify({ kind: btn.dataset.reportKind }) });
+  toast(`${btn.dataset.reportKind} report building`);
+  loadReports(res.id);
+});
+
+// ── profile assistant ────────────────────────
+
+$("#assist-edit-btn").addEventListener("click", async () => {
+  const instruction = $("#assist-instruction").value.trim();
+  if (!instruction) { toast("Type how you want the profile changed", true); return; }
+  const btn = $("#assist-edit-btn");
+  btn.disabled = true; btn.textContent = "✨ thinking…";
+  try {
+    const res = await api("/api/profile/assist", {
+      method: "POST",
+      body: JSON.stringify({ mode: "edit", instruction }),
+    });
+    $("#cfg-profile").value = res.profile || $("#cfg-profile").value;
+    toast(res.changes || "Profile rewritten — review and Save");
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = "✨ rewrite";
+  }
+});
+
+$("#assist-interview-btn").addEventListener("click", async () => {
+  const box = $("#interview-box");
+  const btn = $("#assist-interview-btn");
+  btn.disabled = true; btn.textContent = "✨ preparing questions…";
+  try {
+    const res = await api("/api/profile/assist", {
+      method: "POST", body: JSON.stringify({ mode: "questions" }),
+    });
+    box.innerHTML = (res.questions || []).map((q, i) => `
+      <label class="field">${esc(q)}<input type="text" class="interview-answer" data-q="${esc(q)}"></label>
+    `).join("") + `<button type="button" id="interview-draft-btn" class="ctl-toggle">✨ draft profile from answers</button>`;
+    box.hidden = false;
+    $("#interview-draft-btn").onclick = async () => {
+      const answers = $$(".interview-answer")
+        .map((el) => ({ q: el.dataset.q, a: el.value.trim() }))
+        .filter((a) => a.a);
+      if (!answers.length) { toast("Answer at least one question", true); return; }
+      const dbtn = $("#interview-draft-btn");
+      dbtn.disabled = true; dbtn.textContent = "✨ drafting…";
+      try {
+        const res2 = await api("/api/profile/assist", {
+          method: "POST", body: JSON.stringify({ mode: "draft", answers }),
+        });
+        $("#cfg-profile").value = res2.profile || $("#cfg-profile").value;
+        box.hidden = true;
+        toast("Draft ready — review and Save");
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        dbtn.disabled = false; dbtn.textContent = "✨ draft profile from answers";
+      }
+    };
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = "✨ set up via interview";
+  }
 });
 
 // ── runs & tokens ────────────────────────────
@@ -520,6 +793,7 @@ $("#save-raw").addEventListener("click", async () => {
 
 renderMastheadDate();
 renderChips();
+renderTopicChips();
 refreshStats();
 loadFeed();
 pollStatus(); // pick up an in-flight run if the page was reloaded mid-run

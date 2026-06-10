@@ -90,6 +90,25 @@ async def run(config_path: str = "config.yaml", send_email_flag: bool | None = N
         store.close()
 
 
+def _balanced_select(qualified, max_items, max_per_category=None, max_per_topic=None):
+    """Pick top items (input is score-sorted) capping per-category/topic counts
+    so e.g. arXiv papers can't crowd out everything else."""
+    selected, cat_counts, topic_counts = [], {}, {}
+    for item in qualified:
+        if len(selected) >= max_items:
+            break
+        cat = item.source_category or "other"
+        topic = item.topic or "other"
+        if max_per_category and cat_counts.get(cat, 0) >= max_per_category:
+            continue
+        if max_per_topic and topic_counts.get(topic, 0) >= max_per_topic:
+            continue
+        selected.append(item)
+        cat_counts[cat] = cat_counts.get(cat, 0) + 1
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+    return selected
+
+
 async def _run_pipeline(
     store: Store, run_id: int, config: dict, scoring_config: dict,
     dedup_config: dict, email_config: dict, state_config: dict,
@@ -163,6 +182,7 @@ async def _run_pipeline(
         items=items_to_score,
         interest_profile=config["interest_profile"],
         scoring_config=scoring_config,
+        topics=config.get("topics", []),
         usage_log=usage_log,
     )
 
@@ -179,15 +199,20 @@ async def _run_pipeline(
     if skipped_items:
         stage_counts["skipped"] = len(skipped_items)
 
-    # 7. Filter by min score
+    # 7. Filter by min score, then balance so no category/topic dominates
     min_score = scoring_config.get("min_score", 5)
     max_items = scoring_config.get("max_items", 15)
     qualified = [item for item in scored_items if (item.score or 0) >= min_score]
-    digest_items = qualified[:max_items]
+    digest_items = _balanced_select(
+        qualified,
+        max_items=max_items,
+        max_per_category=scoring_config.get("max_per_category"),
+        max_per_topic=scoring_config.get("max_per_topic"),
+    )
 
     logger.info(
         f"Filter: {len(scored_items)} scored → {len(qualified)} above {min_score} "
-        f"→ {len(digest_items)} in digest (max {max_items})"
+        f"→ {len(digest_items)} in digest (max {max_items}, balanced)"
     )
 
     # 8. Persist: scored items + skipped stubs, mark everything seen

@@ -34,6 +34,7 @@ class FeedItem:
     score_reason: Optional[str] = None
     score_stage: Optional[str] = None  # v2: which stage produced the final score
     highlights: list[str] = field(default_factory=list)  # key phrases from summary
+    topic: Optional[str] = None  # assigned topic from the configurable taxonomy
 
     def to_dict(self) -> dict:
         return {

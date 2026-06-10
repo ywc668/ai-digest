@@ -31,6 +31,8 @@ STAGE2_PROMPT = """Score this item's relevance (0-10) to the interest profile.
 INTERESTS:
 {interest_profile}
 
+TOPICS (pick the single best fit): {topics}
+
 ITEM:
 Title: {title}
 Source: {source_name} ({source_category})
@@ -48,12 +50,14 @@ Scoring guide:
 For GitHub releases: boost major versions and breaking features.
 For arXiv: boost novelty and practical applicability.
 
-Respond with ONLY JSON: {{"score": <0-10>, "reason": "<one sentence>", "highlights": ["<up to 4 important words/phrases copied VERBATIM from the summary>"]}}"""
+Respond with ONLY JSON: {{"score": <0-10>, "reason": "<one sentence>", "topic": "<one topic from the list>", "highlights": ["<up to 4 important words/phrases copied VERBATIM from the summary>"]}}"""
 
 STAGE3_PROMPT = """Evaluate this high-priority item for an AI/ML infrastructure engineer.
 
 INTERESTS:
 {interest_profile}
+
+TOPICS (pick the single best fit): {topics}
 
 ITEM:
 Title: {title}
@@ -63,7 +67,7 @@ Tags: {tags}
 Content: {summary}
 
 Respond with ONLY JSON:
-{{"score": <0-10>, "reason": "<why it matters, 1-2 sentences>", "takeaway": "<action item, 1 sentence>", "highlights": ["<up to 5 important words/phrases copied VERBATIM from the content>"]}}"""
+{{"score": <0-10>, "reason": "<why it matters, 1-2 sentences>", "takeaway": "<action item, 1 sentence>", "topic": "<one topic from the list>", "highlights": ["<up to 5 important words/phrases copied VERBATIM from the content>"]}}"""
 
 
 async def _call(
@@ -103,9 +107,23 @@ def _parse_highlights(result: dict) -> list[str]:
     return [str(h).strip() for h in raw if str(h).strip()][:6]
 
 
-async def _score_stage2(backend, item, interest_profile, usage_log) -> tuple[float, str]:
+def _parse_topic(result: dict, topics: list[str]) -> str | None:
+    raw = str(result.get("topic", "")).strip().lower()
+    if not raw or not topics:
+        return None
+    for t in topics:
+        if t.lower() == raw:
+            return t
+    for t in topics:  # tolerate near-matches like "llm inference" vs "llm-inference"
+        if t.lower().replace("-", " ") == raw.replace("-", " "):
+            return t
+    return "other" if "other" in topics else None
+
+
+async def _score_stage2(backend, item, interest_profile, topics, usage_log) -> tuple[float, str]:
     prompt = STAGE2_PROMPT.format(
         interest_profile=interest_profile,
+        topics=", ".join(topics) if topics else "other",
         title=item.title,
         source_name=item.source_name,
         source_category=item.source_category,
@@ -115,12 +133,14 @@ async def _score_stage2(backend, item, interest_profile, usage_log) -> tuple[flo
     )
     result = await _call(backend, prompt, 250, item, "stage2", usage_log)
     item.highlights = _parse_highlights(result)
+    item.topic = _parse_topic(result, topics)
     return float(result.get("score", 0)), result.get("reason", "")
 
 
-async def _score_stage3(backend, item, interest_profile, usage_log) -> tuple[float, str]:
+async def _score_stage3(backend, item, interest_profile, topics, usage_log) -> tuple[float, str]:
     prompt = STAGE3_PROMPT.format(
         interest_profile=interest_profile,
+        topics=", ".join(topics) if topics else "other",
         title=item.title,
         source_name=item.source_name,
         source_category=item.source_category,
@@ -132,6 +152,9 @@ async def _score_stage3(backend, item, interest_profile, usage_log) -> tuple[flo
     highlights = _parse_highlights(result)
     if highlights:
         item.highlights = highlights
+    topic = _parse_topic(result, topics)
+    if topic:
+        item.topic = topic
     reason = result.get("reason", "")
     takeaway = result.get("takeaway", "")
     combined = f"{reason} → {takeaway}" if takeaway else reason
@@ -142,6 +165,7 @@ async def _progressive_score_item(
     backend,
     item: FeedItem,
     interest_profile: str,
+    topics: list[str],
     s1_threshold: float,
     s3_threshold: float,
     usage_log: list,
@@ -157,14 +181,14 @@ async def _progressive_score_item(
             return item
 
         # Stage 2: Title + summary
-        s2_score, s2_reason = await _score_stage2(backend, item, interest_profile, usage_log)
+        s2_score, s2_reason = await _score_stage2(backend, item, interest_profile, topics, usage_log)
         item.score = s2_score
         item.score_reason = s2_reason
         item.score_stage = "stage2"
 
         # Stage 3: Full analysis (only for high-scoring items)
         if s2_score >= s3_threshold:
-            s3_score, s3_reason = await _score_stage3(backend, item, interest_profile, usage_log)
+            s3_score, s3_reason = await _score_stage3(backend, item, interest_profile, topics, usage_log)
             item.score = s3_score
             item.score_reason = s3_reason
             item.score_stage = "stage3"
@@ -187,11 +211,13 @@ async def score_items(
     items: list[FeedItem],
     interest_profile: str,
     scoring_config: dict,
+    topics: list[str] | None = None,
     usage_log: list | None = None,
     progress_callback=None,
 ) -> list[FeedItem]:
     """Score items with three-stage progressive filtering.
 
+    topics: taxonomy the scorer assigns each item to (stage 2+).
     usage_log: optional list that receives one dict per LLM call.
     progress_callback: optional fn(done, total) invoked after each item.
     """
@@ -199,6 +225,7 @@ async def score_items(
         return items
     if usage_log is None:
         usage_log = []
+    topics = topics or []
 
     s1_threshold = scoring_config.get("stage1_threshold", 3)
     s3_threshold = scoring_config.get("stage3_threshold", 7)
@@ -220,7 +247,7 @@ async def score_items(
     async def score_and_report(item):
         nonlocal done
         result = await _progressive_score_item(
-            backend, item, interest_profile, s1_threshold, s3_threshold, usage_log
+            backend, item, interest_profile, topics, s1_threshold, s3_threshold, usage_log
         )
         done += 1
         if progress_callback:

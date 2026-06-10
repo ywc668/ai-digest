@@ -26,6 +26,8 @@
   <nav class="tabs" id="tabs">
     <button class="tab active" data-tab="today">Today</button>
     <button class="tab" data-tab="archive">Archive</button>
+    <button class="tab" data-tab="stories">Stories</button>
+    <button class="tab" data-tab="reports">Reports</button>
     <button class="tab" data-tab="runs">Runs &amp; Tokens</button>
     <button class="tab" data-tab="settings">Settings</button>
     <button id="run-now" class="run-button">
@@ -44,6 +46,7 @@
     <div class="controls">
       <input id="search" class="search" type="search" placeholder="Search titles, summaries, reasons…">
       <div class="chips" id="category-chips"></div>
+      <div class="chips chips-topics" id="topic-chips"></div>
       <div class="controls-row2">
         <label class="ctl">sort
           <select id="sort">
@@ -73,6 +76,36 @@
     <div class="feed-foot">
       <button id="load-more" class="load-more" hidden>Load more ↓</button>
       <p id="feed-count" class="mono-label"></p>
+    </div>
+  </section>
+
+  <!-- ── STORIES ────────────────────────────────────────── -->
+  <section id="panel-stories" class="panel" hidden>
+    <h2 class="section-head">Start a story</h2>
+    <p class="hint">A story is a living cross-source thread. Describe what you want to follow —
+      e.g. <em>"how Anthropic is investing in AI security"</em> — and the archive is mined for a
+      timeline, kept up to date as new items arrive.</p>
+    <div class="story-create">
+      <textarea id="story-prompt" rows="2" placeholder="Tell me the story of…"></textarea>
+      <button id="story-create-btn" class="save-button">Build story</button>
+    </div>
+    <div class="story-layout">
+      <div id="story-list" class="story-list"></div>
+      <div id="story-view" class="story-view"><p class="hint">Select a story.</p></div>
+    </div>
+  </section>
+
+  <!-- ── REPORTS ────────────────────────────────────────── -->
+  <section id="panel-reports" class="panel" hidden>
+    <h2 class="section-head">Reports</h2>
+    <div class="report-actions">
+      <button class="ctl-toggle" data-report-kind="daily">✎ Generate daily report</button>
+      <button class="ctl-toggle" data-report-kind="weekly">✎ Generate weekly report</button>
+      <span class="hint">Daily covers the last 24h; weekly the last 7 days. The cron job generates these automatically.</span>
+    </div>
+    <div class="story-layout">
+      <div id="report-list" class="story-list"></div>
+      <div id="report-view" class="story-view"><p class="hint">Select a report.</p></div>
     </div>
   </section>
 
@@ -156,9 +189,19 @@
           <label class="field checkbox-field">
             <input id="cfg-email" type="checkbox"> Send email digest after each run
           </label>
-          <label class="field">Interest profile <span class="hint">what the scorer matches against</span>
+          <label class="field">Interest profile <span class="hint">what the scorer matches against — this drives all sorting</span>
             <textarea id="cfg-profile" rows="14" spellcheck="false"></textarea>
           </label>
+          <div class="assist-box">
+            <div class="assist-row">
+              <input id="assist-instruction" type="text"
+                placeholder='Tweak it: "more AI safety, drop hardware"…'>
+              <button type="button" id="assist-edit-btn" class="ctl-toggle">✨ rewrite</button>
+            </div>
+            <button type="button" id="assist-interview-btn" class="ctl-toggle">✨ set up via interview</button>
+            <div id="interview-box" hidden></div>
+            <p class="hint">Proposed changes land in the textarea above — review, then Save.</p>
+          </div>
           <button type="submit" class="save-button">Save quick settings</button>
           <p class="hint">Quick saves rewrite config.yaml without comments. Use the raw editor to keep full control.</p>
         </form>
