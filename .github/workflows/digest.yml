@@ -1,3 +1,7 @@
+# LEGACY FALLBACK — v3 runs locally (see README). This workflow still works as a
+# manual trigger but requires scoring.backend: anthropic in config.yaml (no Ollama
+# in CI) and has no persistent dedup state (digest.db is not committed), so it may
+# re-score items already seen locally.
 name: Daily AI Research Digest
 
 on:

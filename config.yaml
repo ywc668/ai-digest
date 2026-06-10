@@ -1,7 +1,7 @@
-# AI Research Digest v2.1 Configuration
+# AI Research Digest v3 Configuration
 # ──────────────────────────────────────────────
-# Cost target: < $3 per run (~$1 typical)
-# Rate limit: respects 50 req/min API limit
+# Default backend is local Ollama (free). Switch scoring.backend to
+# "anthropic" to use the Claude API (costs money, needs ANTHROPIC_API_KEY).
 
 # ── Interest Profile ──────────────────────────
 interest_profile: |
@@ -29,11 +29,19 @@ interest_profile: |
 
 # ── Scoring Settings ──────────────────────────
 scoring:
-  model: "claude-sonnet-4-20250514"
+  # Backend: "ollama" (local, free) or "anthropic" (Claude API, paid)
+  backend: "ollama"
 
-  # Rate limit protection (your API limit is 50 req/min, we use 40 with buffer)
-  requests_per_minute: 40
-  max_concurrent: 2       # Only 2 items scored in parallel
+  ollama:
+    model: "qwen3.6:latest"
+    base_url: "http://localhost:11434"
+    max_concurrent: 4
+
+  anthropic:
+    model: "claude-sonnet-4-20250514"
+    # Rate limit protection (your API limit is 50 req/min, we use 40 with buffer)
+    requests_per_minute: 40
+    max_concurrent: 2     # Only 2 items scored in parallel
 
   # Progressive filtering thresholds
   stage1_threshold: 3     # Title-only screen: drop < 3
@@ -42,7 +50,7 @@ scoring:
 
   min_score: 5
   max_items: 15
-  # Cap total items sent to scoring (prevents timeout on first run / large feeds)
+  # Cap total items sent to scoring (prevents marathon runs on large feeds)
   max_items_to_score: 150
 
 # ── Dedup Settings ────────────────────────────
@@ -51,9 +59,9 @@ dedup:
   cross_source: true
 
 # ── Feed Sources ──────────────────────────────
-# TRIMMED for cost control. arXiv cs.AI+cs.LG combined can produce 200+
-# items/day. We keep only cs.LG (ML, most relevant) and cs.CL (NLP).
-# Add back cs.AI, cs.DC, cs.SE later once cost is validated.
+# arXiv cs.AI+cs.LG combined can produce 200+ items/day. We keep only
+# cs.LG (ML, most relevant) and cs.CL (NLP). With the free Ollama backend
+# you can add back cs.AI, cs.DC, cs.SE — the only cost is run time.
 feeds:
   arxiv:
     - name: "arXiv — Machine Learning"
@@ -117,10 +125,13 @@ feeds:
 
 # ── Email Settings ────────────────────────────
 email:
+  enabled: false          # dashboard is the primary surface; flip on to restore email
   subject_prefix: "AI Digest"
   sender_name: "AI Research Digest"
 
 # ── State Management ──────────────────────────
 state:
-  retention_days: 30
-  state_file: "state.json"
+  retention_days: 30          # how long to remember seen item ids (dedup)
+  item_retention_days: 90     # how long to keep unstarred items in the archive
+  state_file: "state.json"    # legacy; migrated into digest.db on first run
+  db_file: "digest.db"

@@ -1,121 +1,142 @@
-# AI Research Digest v2
+# AI Research Digest v3
 
-A Python-based AI research monitoring system running on GitHub Actions. Fetches feeds from arXiv, technical blogs, GitHub releases, newsletters, and podcasts. Scores items for relevance using Claude API with **three-stage progressive filtering** to cut API costs by 60-80%. Delivers a curated daily email digest.
+A local-first AI research monitoring system. Fetches feeds from arXiv, technical blogs,
+GitHub releases, newsletters, and podcasts; deduplicates; scores items against your interest
+profile with **three-stage progressive filtering**; and serves everything through a local
+web dashboard. Scoring runs on a **local Ollama model by default — zero API cost** — with
+the Claude API available as a switchable backend.
 
-## What's New in v2
+## What's new in v3
 
-| Feature | v1 | v2 |
-|---------|----|----|
-| Scoring | Single-pass full scoring | **3-stage cascade** (title → summary → full) |
-| Dedup | Hash-based only | **3-layer** (hash + URL norm + fuzzy title) |
-| API cost | ~$0.05/day (100 items) | **~$0.01-0.02/day** (same volume) |
-| Categories | 4 | **6** (+ labs, podcasts) |
-| State | Basic seen_ids | **Run history + stage stats** |
-| Email | Basic grouping | **Stage badges + API savings counter** |
+| | v2 | v3 |
+|---|----|----|
+| Where it runs | GitHub Actions | **Your machine** (CI kept as manual fallback) |
+| Scoring | Claude API only (~$0.50/run real cost) | **Ollama local model (free)** or Claude |
+| Storage | `state.json` committed by CI | **SQLite archive** (items, runs, token ledger) |
+| Reading surface | Daily email | **Web dashboard** (+ optional email) |
+| Tuning | Edit YAML, push, wait | **Live in the dashboard** |
+| Token visibility | None | Per-call usage logged, per-run totals & cost |
 
 ## Architecture
 
 ```
-RSS Feeds (41 sources across 6 categories)
+RSS Feeds (24 sources across 6 categories)
         │
         ▼
    Feed Fetcher (async, feedparser)
         │
         ▼
-   Multi-layer Dedup
-   ├── Hash match (already seen)
-   ├── URL normalization (tracking param strip)
-   └── Fuzzy title similarity (cosine ≥ 0.7)
+   Multi-layer Dedup (hash → URL normalization → fuzzy title)
         │
         ▼
-   3-Stage Progressive Scoring (Claude API)
-   ├── Stage 1: Title-only screen → drop < 3/10
-   ├── Stage 2: Title + summary   → score 3-10
-   └── Stage 3: Full analysis     → only if stage2 ≥ 7
+   3-Stage Progressive Scoring          ┌─ backends.py
+   ├── Stage 1: Title-only screen      │   ├─ Ollama (qwen3.6, local, free)
+   ├── Stage 2: Title + summary        │   └─ Anthropic (Claude API)
+   └── Stage 3: Full analysis (≥7)     └─ every call logged to token ledger
         │
         ▼
-   Email Digest (HTML via SMTP)
-        │
-        ▼
-   GitHub Actions (daily cron @ 7am PT)
+   SQLite archive (digest.db) ──► Web dashboard (FastAPI + static SPA)
+        │                          http://localhost:8765
+        └──► optional HTML email
 ```
 
-## Quick Start
-
-### 1. Fork this repo
-
-### 2. Set GitHub Secrets
-
-| Secret | Example |
-|--------|---------|
-| `ANTHROPIC_API_KEY` | `sk-ant-...` |
-| `SMTP_HOST` | `smtp.gmail.com` |
-| `SMTP_PORT` | `587` |
-| `SMTP_USER` | `you@gmail.com` |
-| `SMTP_PASSWORD` | Gmail app password |
-| `DIGEST_TO_EMAIL` | `you@gmail.com` |
-
-### 3. Customize `config.yaml`
-
-Edit the `interest_profile` to match your focus areas. Adjust `stage1_threshold`, `stage2_threshold`, and `stage3_threshold` to control filtering aggressiveness.
-
-### 4. Run manually or wait for cron
+## Quick start
 
 ```bash
-# Local testing
-pip install -r requirements.txt
-export ANTHROPIC_API_KEY="your-key"
-export SMTP_HOST="smtp.gmail.com"
-export SMTP_PORT="587"
-export SMTP_USER="you@gmail.com"
-export SMTP_PASSWORD="your-app-password"
-export DIGEST_TO_EMAIL="you@gmail.com"
-python main.py
+# one-time setup
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+ollama pull qwen3.6        # or any model; set it in config.yaml
+
+# start the dashboard
+.venv/bin/python server.py
+# → open http://localhost:8765 and hit "Run now"
 ```
 
-Or trigger from GitHub Actions → "Run workflow".
+Or run the pipeline headless:
 
-## Project Structure
+```bash
+.venv/bin/python main.py --no-email
+```
+
+## The dashboard
+
+- **Today / Archive** — the scored feed: search, category chips, sort by score/date,
+  min-score slider, star ★ / hide ✕, expandable summaries, stage badges.
+- **Runs & Tokens** — run history, per-stage token ledger, live pipeline log.
+- **Settings** — backend switch (ollama ⇄ anthropic), thresholds, digest size,
+  interest profile editor, plus a raw `config.yaml` editor for full control
+  (feeds, dedup, retention).
+
+## Configuration (`config.yaml`)
+
+- `interest_profile` — what the scorer matches against. Edit it in the dashboard.
+- `scoring.backend` — `ollama` (default, free) or `anthropic`.
+- `scoring.stage1_threshold / stage3_threshold / min_score` — filtering aggressiveness.
+- `scoring.max_items_to_score` — cap per run. With the free local backend you can raise
+  this (or add more arXiv categories) — the only cost is run time.
+- `email.enabled` — flip on to also receive the HTML email (needs `SMTP_*` env vars).
+
+## Scheduling a daily local run
+
+Either click **Run now** each morning, or install a launchd job (runs at next wake if
+the Mac was asleep):
+
+```bash
+cat > ~/Library/LaunchAgents/com.ai-digest.daily.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.ai-digest.daily</string>
+  <key>ProgramArguments</key><array>
+    <string>$(pwd)/.venv/bin/python</string>
+    <string>$(pwd)/main.py</string>
+    <string>--no-email</string>
+  </array>
+  <key>WorkingDirectory</key><string>$(pwd)</string>
+  <key>StartCalendarInterval</key><dict>
+    <key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key><string>/tmp/ai-digest.log</string>
+  <key>StandardErrorPath</key><string>/tmp/ai-digest.log</string>
+</dict></plist>
+EOF
+launchctl load ~/Library/LaunchAgents/com.ai-digest.daily.plist
+```
+
+## Project structure
 
 ```
 ai-digest/
-├── .github/workflows/digest.yml  ← GitHub Actions cron
-├── config.yaml                    ← Feeds + interest profile + thresholds
-├── main.py                        ← Pipeline orchestrator
-├── fetcher.py                     ← Async RSS/Atom fetcher
-├── dedup.py                       ← 3-layer deduplication engine
-├── scorer.py                      ← 3-stage progressive Claude scoring
-├── state.py                       ← State management + run history
-├── digest.py                      ← HTML email composer + SMTP
-├── requirements.txt
-├── state.json                     ← Auto-managed, committed by CI
-└── README.md
+├── config.yaml        ← feeds + interest profile + thresholds + backend
+├── main.py            ← pipeline orchestrator (CLI)
+├── fetcher.py         ← async RSS/Atom fetcher
+├── dedup.py           ← 3-layer deduplication engine
+├── scorer.py          ← 3-stage progressive scoring (backend-agnostic)
+├── backends.py        ← Ollama + Anthropic scoring backends
+├── store.py           ← SQLite archive: items, runs, token ledger
+├── digest.py          ← HTML email composer + SMTP (optional)
+├── server.py          ← FastAPI dashboard server
+├── static/            ← "The AI Digest" web frontend
+├── digest.db          ← local archive (gitignored)
+├── docs/              ← analysis & design notes
+└── .github/workflows/ ← legacy CI path (manual trigger, anthropic backend)
 ```
 
-## How Progressive Filtering Works
+## Cost
 
-Given 100 new items per day:
-
-1. **Stage 1** (title-only, ~20 tokens each): Screens all 100 items. ~60 score below 3 and are dropped. Cost: ~2K tokens.
-2. **Stage 2** (title+summary, ~200 tokens each): Scores remaining 40 items. Cost: ~8K tokens.
-3. **Stage 3** (full analysis, ~500 tokens each): Deep-analyzes ~8 items scoring ≥7. Cost: ~4K tokens.
-
-**Total: ~14K tokens vs ~50K tokens** for single-pass scoring. That's roughly **$0.01/day** on Claude Sonnet.
-
-## Cost Estimate
-
-- **GitHub Actions**: Free (public repo) or 2000 min/month (private)
-- **Claude API**: ~$0.01-0.02/day (~$0.50/month)
-- **Email**: Free via Gmail SMTP
+- **Ollama backend (default)**: $0. A full 300-item run measured at ~0.5 s per stage-1
+  call on an M5 Pro with qwen3.6.
+- **Anthropic backend**: roughly $0.47 per 150-item run on Sonnet as currently prompted.
+  See `docs/2026-06-09-local-pipeline-analysis.md` for the full token breakdown and the
+  optimization plan (batching + caching + Haiku → ~$0.02–0.04/run).
 
 ## Roadmap
 
-- [ ] Telegram delivery channel
-- [ ] Weekly summary digest (top items of the week)
-- [ ] Readwise Reader integration (auto-save high-scoring items)
-- [ ] Embedding-based interest learning (feedback loop from starred items)
-- [ ] SQLite knowledge base for searchable archive
-- [ ] Podcast transcript scoring via Whisper
+- [ ] Hybrid scoring: local model for stages 1–2, Claude for stage-3 deep dives
+- [ ] Interest learning from stars/hides (feedback loop)
+- [ ] Weekly summary view (top items of the week)
+- [ ] Batched stage-1 scoring (one call per 25 titles) for the cloud backend
 
 ## License
 

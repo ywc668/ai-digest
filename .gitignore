@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# AI Digest local data
+digest.db
+digest.db-wal
+digest.db-shm
+digest_latest.html

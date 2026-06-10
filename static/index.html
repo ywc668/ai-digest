@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The AI Digest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..700&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128240;</text></svg>">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<header class="masthead">
+  <div class="masthead-top">
+    <span id="masthead-date" class="mono-label">—</span>
+    <span class="masthead-top-right">
+      <span id="backend-chip" class="mono-label backend-chip">backend: —</span>
+      <span id="cost-chip" class="mono-label">$0.00 lifetime</span>
+    </span>
+  </div>
+  <h1 class="masthead-title">The <em>AI</em> Digest</h1>
+  <p class="masthead-tagline">Fetched, deduplicated &amp; scored against your interests — entirely on this machine.</p>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="today">Today</button>
+    <button class="tab" data-tab="archive">Archive</button>
+    <button class="tab" data-tab="runs">Runs &amp; Tokens</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <button id="run-now" class="run-button">
+      <span class="run-button-label">Run now</span>
+      <span class="run-button-progress" id="run-progress-bar"></span>
+    </button>
+  </nav>
+  <div id="run-status-line" class="run-status-line" hidden></div>
+</header>
+
+<main>
+  <!-- ── FEED (today + archive share this) ─────────────── -->
+  <section id="panel-feed" class="panel">
+    <div class="stats-strip" id="stats-strip"></div>
+
+    <div class="controls">
+      <input id="search" class="search" type="search" placeholder="Search titles, summaries, reasons…">
+      <div class="chips" id="category-chips"></div>
+      <div class="controls-row2">
+        <label class="ctl">sort
+          <select id="sort">
+            <option value="score">score</option>
+            <option value="date">published</option>
+            <option value="first_seen">fetched</option>
+          </select>
+        </label>
+        <label class="ctl">window
+          <select id="days">
+            <option value="1">today</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="">all time</option>
+          </select>
+        </label>
+        <label class="ctl">min score
+          <input id="min-score" type="range" min="0" max="10" step="1" value="5">
+          <span id="min-score-val" class="mono-label">5</span>
+        </label>
+        <button id="toggle-starred" class="ctl-toggle" title="Show starred only">★ starred</button>
+        <button id="toggle-filtered" class="ctl-toggle" title="Include items dropped at the title screen">show rejects</button>
+      </div>
+    </div>
+
+    <div id="feed" class="feed"></div>
+    <div class="feed-foot">
+      <button id="load-more" class="load-more" hidden>Load more ↓</button>
+      <p id="feed-count" class="mono-label"></p>
+    </div>
+  </section>
+
+  <!-- ── RUNS & TOKENS ──────────────────────────────────── -->
+  <section id="panel-runs" class="panel" hidden>
+    <h2 class="section-head">Token ledger</h2>
+    <div id="usage-cards" class="usage-cards"></div>
+    <h2 class="section-head">Run history</h2>
+    <div class="table-wrap">
+      <table class="runs-table" id="runs-table">
+        <thead><tr>
+          <th>#</th><th>when</th><th>backend</th><th>fetched</th><th>new</th>
+          <th>scored</th><th>s1 cut</th><th>s2</th><th>s3</th><th>digest</th>
+          <th>tokens in/out</th><th>cost</th><th>status</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <h2 class="section-head">Live log</h2>
+    <pre id="run-log" class="run-log">No run this session.</pre>
+  </section>
+
+  <!-- ── SETTINGS ───────────────────────────────────────── -->
+  <section id="panel-settings" class="panel" hidden>
+    <div class="settings-grid">
+      <div class="settings-col">
+        <h2 class="section-head">Quick controls</h2>
+        <form id="quick-form" class="quick-form">
+          <label class="field">Scoring backend
+            <select id="cfg-backend">
+              <option value="ollama">ollama — local, free</option>
+              <option value="anthropic">anthropic — Claude API, paid</option>
+            </select>
+          </label>
+          <label class="field">Ollama model
+            <input id="cfg-ollama-model" type="text" spellcheck="false">
+          </label>
+          <div class="field-row">
+            <label class="field">Stage-1 cutoff <span class="hint">drop titles below</span>
+              <input id="cfg-s1" type="number" min="0" max="10" step="1">
+            </label>
+            <label class="field">Stage-3 trigger <span class="hint">deep-analyze above</span>
+              <input id="cfg-s3" type="number" min="0" max="10" step="1">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">Min digest score
+              <input id="cfg-min-score" type="number" min="0" max="10" step="1">
+            </label>
+            <label class="field">Max digest items
+              <input id="cfg-max-items" type="number" min="1" max="100" step="1">
+            </label>
+            <label class="field">Scoring cap / run
+              <input id="cfg-max-score" type="number" min="10" max="2000" step="10">
+            </label>
+          </div>
+          <label class="field checkbox-field">
+            <input id="cfg-email" type="checkbox"> Send email digest after each run
+          </label>
+          <label class="field">Interest profile <span class="hint">what the scorer matches against</span>
+            <textarea id="cfg-profile" rows="14" spellcheck="false"></textarea>
+          </label>
+          <button type="submit" class="save-button">Save quick settings</button>
+          <p class="hint">Quick saves rewrite config.yaml without comments. Use the raw editor to keep full control.</p>
+        </form>
+      </div>
+      <div class="settings-col">
+        <h2 class="section-head">Raw config.yaml</h2>
+        <p class="hint">Full pipeline control: feeds, dedup thresholds, retention, everything.</p>
+        <textarea id="cfg-raw" class="raw-editor" rows="34" spellcheck="false"></textarea>
+        <button id="save-raw" class="save-button">Save raw YAML</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+  <span>The AI Digest · printed locally on an M5 · no clouds were harmed</span>
+</footer>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
