@@ -128,6 +128,30 @@ function scoreClass(score) {
   return "";
 }
 
+function regexEscape(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/* Escape the summary, then wrap each highlight phrase in <mark>.
+   The (<tag>)|(phrase) alternation prevents matching inside HTML tags. */
+function renderSummary(summary, highlights) {
+  let html = esc(summary);
+  const phrases = [...(highlights || [])].sort((a, b) => b.length - a.length);
+  for (const h of phrases) {
+    const eh = esc(h.trim());
+    if (eh.length < 2) continue;
+    html = html.replace(
+      new RegExp(`(<[^>]+>)|(${regexEscape(eh)})`, "gi"),
+      (m, tag, txt) => (tag ? tag : `<mark>${txt}</mark>`)
+    );
+  }
+  return html;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
+}
+
 function renderItem(item, idx) {
   const score = item.score == null ? "·" : Math.round(item.score);
   const stageBadge =
@@ -137,6 +161,8 @@ function renderItem(item, idx) {
   const authors = (item.authors || []).slice(0, 3).join(", ");
   const pub = item.published ? new Date(item.published).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
   const hasSummary = item.summary && item.summary.length > 10;
+  const host = hostOf(item.url);
+  const highlights = item.highlights || [];
 
   return `<article class="item" style="--i:${idx}" data-id="${esc(item.id)}">
     <div class="item-score ${scoreClass(item.score || 0)}">${score}<small>${esc(item.score_stage || "")}</small></div>
@@ -144,10 +170,12 @@ function renderItem(item, idx) {
       <h3 class="item-title"><a href="${esc(item.url)}" target="_blank" rel="noopener">${esc(item.title)}</a></h3>
       <div class="item-meta">
         <span class="src">${esc(item.source_name)}</span>
-        ${authors ? " · " + esc(authors) : ""}${pub ? " · " + pub : ""}${stageBadge}
+        ${authors ? " · " + esc(authors) : ""}${pub ? " · " + pub : ""}
+        ${host ? ` · <a class="link-out" href="${esc(item.url)}" target="_blank" rel="noopener" title="${esc(item.url)}">${esc(host)} ↗</a>` : ""}${stageBadge}
       </div>
       ${item.score_reason ? `<p class="item-reason">${esc(item.score_reason)}</p>` : ""}
-      ${hasSummary ? `<p class="item-summary">${esc(item.summary)}</p>
+      ${highlights.length ? `<div class="item-highlights">${highlights.map((h) => `<span class="hl">${esc(h)}</span>`).join("")}</div>` : ""}
+      ${hasSummary ? `<p class="item-summary">${renderSummary(item.summary, highlights)}</p>
       <button class="item-expand" data-act="expand">read summary +</button>` : ""}
     </div>
     <div class="item-actions">
@@ -367,6 +395,7 @@ async function loadSettings() {
   $("#cfg-max-items").value = s.max_items ?? 15;
   $("#cfg-max-score").value = s.max_items_to_score ?? 150;
   $("#cfg-email").checked = !!(p.email || {}).enabled;
+  $("#cfg-skip-patch").checked = (p.filters || {}).skip_patch_releases !== false;
   $("#cfg-profile").value = p.interest_profile || "";
   $("#cfg-raw").value = cfg.yaml;
 }
@@ -382,6 +411,7 @@ $("#quick-form").addEventListener("submit", async (e) => {
     "scoring.max_items": Number($("#cfg-max-items").value),
     "scoring.max_items_to_score": Number($("#cfg-max-score").value),
     "email.enabled": $("#cfg-email").checked,
+    "filters.skip_patch_releases": $("#cfg-skip-patch").checked,
     "interest_profile": $("#cfg-profile").value,
   };
   try {

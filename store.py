@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS items (
     score REAL,
     score_reason TEXT,
     score_stage TEXT,
+    highlights TEXT,       -- JSON array of key phrases
     run_id INTEGER,
     first_seen TEXT NOT NULL,
     starred INTEGER NOT NULL DEFAULT 0,
@@ -91,8 +92,15 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate_schema()
         if first_init:
             self._migrate_legacy_state(Path(legacy_state))
+
+    def _migrate_schema(self) -> None:
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(items)")}
+        if "highlights" not in cols:
+            self.conn.execute("ALTER TABLE items ADD COLUMN highlights TEXT")
+            self.conn.commit()
 
     def close(self):
         self.conn.close()
@@ -155,19 +163,29 @@ class Store:
                 it.source_name, it.source_category,
                 it.published.isoformat() if it.published else None,
                 json.dumps(it.authors), json.dumps(it.tags[:15]),
-                it.score, it.score_reason, it.score_stage, run_id, now,
+                it.score, it.score_reason, it.score_stage,
+                json.dumps(it.highlights), run_id, now,
             )
             for it in items
         ]
         self.conn.executemany(
             """INSERT INTO items
                (id, title, url, summary, source_name, source_category, published,
-                authors, tags, score, score_reason, score_stage, run_id, first_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                authors, tags, score, score_reason, score_stage, highlights,
+                run_id, first_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  score=excluded.score, score_reason=excluded.score_reason,
-                 score_stage=excluded.score_stage, run_id=excluded.run_id""",
+                 score_stage=excluded.score_stage, highlights=excluded.highlights,
+                 run_id=excluded.run_id""",
             rows,
+        )
+        self.conn.commit()
+
+    def update_item_highlights(self, item_id: str, highlights: list[str]) -> None:
+        self.conn.execute(
+            "UPDATE items SET highlights = ? WHERE id = ?",
+            (json.dumps(highlights), item_id),
         )
         self.conn.commit()
 
@@ -221,7 +239,9 @@ class Store:
             where.append("hidden = 0")
         if days:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-            where.append("first_seen >= ?")
+            # Window on the item's publication date; fall back to fetch time only
+            # for feeds that omit a published date.
+            where.append("COALESCE(published, first_seen) >= ?")
             params.append(cutoff)
         if run_id:
             where.append("run_id = ?")
@@ -248,6 +268,7 @@ class Store:
             d = dict(r)
             d["authors"] = json.loads(d["authors"] or "[]")
             d["tags"] = json.loads(d["tags"] or "[]")
+            d["highlights"] = json.loads(d["highlights"] or "[]")
             items.append(d)
         return {"total": total, "items": items}
 

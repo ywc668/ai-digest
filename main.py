@@ -16,6 +16,7 @@ import yaml
 
 from fetcher import fetch_all_feeds
 from dedup import deduplicate
+from filters import filter_release_noise
 from scorer import score_items
 from store import Store
 from digest import compose_digest, send_email
@@ -121,11 +122,18 @@ async def _run_pipeline(
     new_count = len(new_items)
     after_dedup = new_count
 
+    # 4b. Drop patch/pre-release GitHub noise before spending scoring effort.
+    # Dropped items are still marked seen below so they never resurface.
+    all_new_ids = [i.id for i in new_items]
+    if config.get("filters", {}).get("skip_patch_releases", True):
+        new_items, _release_noise = filter_release_noise(new_items)
+
     if not new_items:
-        logger.info("No new items after dedup. Skipping scoring.")
+        logger.info("No new items after dedup/filtering. Skipping scoring.")
+        store.mark_seen_batch(all_new_ids)
         store.finish_run(
-            run_id, fetched=total_fetched, new=0, after_dedup=0, scored=0,
-            sent=0, stage_counts={},
+            run_id, fetched=total_fetched, new=new_count, after_dedup=after_dedup,
+            scored=0, sent=0, stage_counts={},
         )
         return
 
@@ -186,7 +194,7 @@ async def _run_pipeline(
     for item in skipped_items:
         item.score_stage = "skipped"
     store.save_items(scored_items + skipped_items, run_id)
-    store.mark_seen_batch([i.id for i in new_items])
+    store.mark_seen_batch(all_new_ids)
     store.prune(
         seen_retention_days=state_config.get("retention_days", 30),
         item_retention_days=state_config.get("item_retention_days", 90),

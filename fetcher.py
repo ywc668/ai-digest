@@ -33,6 +33,7 @@ class FeedItem:
     score: Optional[float] = None
     score_reason: Optional[str] = None
     score_stage: Optional[str] = None  # v2: which stage produced the final score
+    highlights: list[str] = field(default_factory=list)  # key phrases from summary
 
     def to_dict(self) -> dict:
         return {
@@ -48,6 +49,7 @@ class FeedItem:
             "score": self.score,
             "score_reason": self.score_reason,
             "score_stage": self.score_stage,
+            "highlights": self.highlights,
         }
 
 

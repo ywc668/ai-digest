@@ -29,6 +29,9 @@ RSS Feeds (24 sources across 6 categories)
    Multi-layer Dedup (hash → URL normalization → fuzzy title)
         │
         ▼
+   Release-noise filter (drops patch/rc/beta GitHub releases)
+        │
+        ▼
    3-Stage Progressive Scoring          ┌─ backends.py
    ├── Stage 1: Title-only screen      │   ├─ Ollama (qwen3.6, local, free)
    ├── Stage 2: Title + summary        │   └─ Anthropic (Claude API)
@@ -62,7 +65,9 @@ Or run the pipeline headless:
 ## The dashboard
 
 - **Today / Archive** — the scored feed: search, category chips, sort by score/date,
-  min-score slider, star ★ / hide ✕, expandable summaries, stage badges.
+  min-score slider, star ★ / hide ✕, expandable summaries with **key phrases
+  highlighted**, visible source link per item, stage badges. The date window
+  filters on the item's **published date** (fetch date only as fallback).
 - **Runs & Tokens** — run history, per-stage token ledger, live pipeline log.
 - **Settings** — backend switch (ollama ⇄ anthropic), thresholds, digest size,
   interest profile editor, plus a raw `config.yaml` editor for full control
@@ -75,6 +80,8 @@ Or run the pipeline headless:
 - `scoring.stage1_threshold / stage3_threshold / min_score` — filtering aggressiveness.
 - `scoring.max_items_to_score` — cap per run. With the free local backend you can raise
   this (or add more arXiv categories) — the only cost is run time.
+- `filters.skip_patch_releases` — drop patch/pre-release GitHub noise (v4.41.2,
+  v1.3.0rc12) before scoring; major/minor releases (v1.3.0, v25.10) are kept.
 - `email.enabled` — flip on to also receive the HTML email (needs `SMTP_*` env vars).
 
 ## Scheduling a daily local run
@@ -112,6 +119,7 @@ ai-digest/
 ├── main.py            ← pipeline orchestrator (CLI)
 ├── fetcher.py         ← async RSS/Atom fetcher
 ├── dedup.py           ← 3-layer deduplication engine
+├── filters.py         ← pre-scoring filters (release noise)
 ├── scorer.py          ← 3-stage progressive scoring (backend-agnostic)
 ├── backends.py        ← Ollama + Anthropic scoring backends
 ├── store.py           ← SQLite archive: items, runs, token ledger

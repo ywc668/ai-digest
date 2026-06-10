@@ -48,7 +48,7 @@ Scoring guide:
 For GitHub releases: boost major versions and breaking features.
 For arXiv: boost novelty and practical applicability.
 
-Respond with ONLY JSON: {{"score": <0-10>, "reason": "<one sentence>"}}"""
+Respond with ONLY JSON: {{"score": <0-10>, "reason": "<one sentence>", "highlights": ["<up to 4 important words/phrases copied VERBATIM from the summary>"]}}"""
 
 STAGE3_PROMPT = """Evaluate this high-priority item for an AI/ML infrastructure engineer.
 
@@ -63,7 +63,7 @@ Tags: {tags}
 Content: {summary}
 
 Respond with ONLY JSON:
-{{"score": <0-10>, "reason": "<why it matters, 1-2 sentences>", "takeaway": "<action item, 1 sentence>"}}"""
+{{"score": <0-10>, "reason": "<why it matters, 1-2 sentences>", "takeaway": "<action item, 1 sentence>", "highlights": ["<up to 5 important words/phrases copied VERBATIM from the content>"]}}"""
 
 
 async def _call(
@@ -96,6 +96,13 @@ async def _score_stage1(backend, item, interest_profile, usage_log) -> float:
     return float(result.get("score", 0))
 
 
+def _parse_highlights(result: dict) -> list[str]:
+    raw = result.get("highlights", [])
+    if not isinstance(raw, list):
+        return []
+    return [str(h).strip() for h in raw if str(h).strip()][:6]
+
+
 async def _score_stage2(backend, item, interest_profile, usage_log) -> tuple[float, str]:
     prompt = STAGE2_PROMPT.format(
         interest_profile=interest_profile,
@@ -106,7 +113,8 @@ async def _score_stage2(backend, item, interest_profile, usage_log) -> tuple[flo
         tags=", ".join(item.tags[:10]) if item.tags else "None",
         summary=item.summary[:800] if item.summary else "No summary available",
     )
-    result = await _call(backend, prompt, 150, item, "stage2", usage_log)
+    result = await _call(backend, prompt, 250, item, "stage2", usage_log)
+    item.highlights = _parse_highlights(result)
     return float(result.get("score", 0)), result.get("reason", "")
 
 
@@ -120,7 +128,10 @@ async def _score_stage3(backend, item, interest_profile, usage_log) -> tuple[flo
         tags=", ".join(item.tags[:10]) if item.tags else "None",
         summary=item.summary[:1500] if item.summary else "No content available",
     )
-    result = await _call(backend, prompt, 250, item, "stage3", usage_log)
+    result = await _call(backend, prompt, 350, item, "stage3", usage_log)
+    highlights = _parse_highlights(result)
+    if highlights:
+        item.highlights = highlights
     reason = result.get("reason", "")
     takeaway = result.get("takeaway", "")
     combined = f"{reason} → {takeaway}" if takeaway else reason

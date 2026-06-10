@@ -58,6 +58,12 @@ dedup:
   title_similarity_threshold: 0.7
   cross_source: true
 
+# ── Pre-scoring Filters ───────────────────────
+filters:
+  # Drop patch/pre-releases from GitHub feeds (v4.41.2, v1.3.0rc12, betas).
+  # Major/minor releases (v1.3.0, v0.22.0, v25.10) are kept.
+  skip_patch_releases: true
+
 # ── Feed Sources ──────────────────────────────
 # arXiv cs.AI+cs.LG combined can produce 200+ items/day. We keep only
 # cs.LG (ML, most relevant) and cs.CL (NLP). With the free Ollama backend

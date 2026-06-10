@@ -224,6 +224,19 @@ main { max-width: 980px; margin: 0 auto; padding: 18px 24px 60px; }
 .badge.deep { color: var(--good); background: var(--good-soft); }
 .badge.reject { color: var(--ink-faint); }
 .item-reason { font-style: italic; color: var(--ink-soft); font-size: 15.5px; margin: 0; }
+.link-out { color: var(--ink-soft); text-decoration: none; border-bottom: 1px dotted var(--ink-faint); }
+.link-out:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.item-highlights { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.hl {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .02em;
+  background: var(--mid-soft); color: var(--mid);
+  padding: 2px 9px; border-radius: 999px;
+}
+mark {
+  background: var(--mid-soft); color: inherit;
+  box-shadow: inset 0 -2px 0 var(--mid);
+  padding: 0 1px;
+}
 .item-summary {
   color: var(--ink-soft); font-size: 14.5px; margin: 7px 0 0;
   display: none;
