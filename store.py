@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS runs (
     error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS embeddings (
+    item_id TEXT PRIMARY KEY,
+    vector BLOB NOT NULL,      -- float32 array
+    dim INTEGER NOT NULL,
+    model TEXT,
+    created TEXT
+);
+
 CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL,            -- daily | weekly
@@ -134,6 +142,8 @@ class Store:
             ("highlights", "TEXT"),
             ("topic", "TEXT"),
             ("deep_dive", "TEXT"),   # cached JSON from the dig-deeper analysis
+            ("entities", "TEXT"),    # JSON list of extracted entities (orgs/models/techniques)
+            ("prerank", "REAL"),     # stage-0 classifier probability, if trained
         ]:
             if col not in cols:
                 self.conn.execute(f"ALTER TABLE items ADD COLUMN {col} {decl}")
@@ -220,7 +230,8 @@ class Store:
                 it.published.isoformat() if it.published else None,
                 json.dumps(it.authors), json.dumps(it.tags[:15]),
                 it.score, it.score_reason, it.score_stage,
-                json.dumps(it.highlights), it.topic, run_id, now,
+                json.dumps(it.highlights), it.topic, json.dumps(it.entities),
+                run_id, now,
             )
             for it in items
         ]
@@ -228,12 +239,13 @@ class Store:
             """INSERT INTO items
                (id, title, url, summary, source_name, source_category, published,
                 authors, tags, score, score_reason, score_stage, highlights,
-                topic, run_id, first_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                topic, entities, run_id, first_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  score=excluded.score, score_reason=excluded.score_reason,
                  score_stage=excluded.score_stage, highlights=excluded.highlights,
-                 topic=excluded.topic, run_id=excluded.run_id""",
+                 topic=excluded.topic, entities=excluded.entities,
+                 run_id=excluded.run_id""",
             rows,
         )
         self.conn.commit()
@@ -360,6 +372,49 @@ class Store:
         d["highlights"] = json.loads(d["highlights"] or "[]")
         return d
 
+    # ── Embeddings / feedback ─────────────────────
+
+    def save_embeddings(self, rows: list[tuple]) -> None:
+        """rows: [(item_id, vector_bytes, dim, model)]"""
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO embeddings (item_id, vector, dim, model, created) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(i, v, d, m, now) for i, v, d, m in rows],
+        )
+        self.conn.commit()
+
+    def items_missing_embeddings(self, limit: int = 2000) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT i.id, i.title, i.summary FROM items i
+               LEFT JOIN embeddings e ON e.item_id = i.id
+               WHERE e.item_id IS NULL LIMIT ?""", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_all_embeddings(self) -> list[tuple]:
+        """[(item_id, vector_bytes, dim)] for every embedded item."""
+        return [
+            (r["item_id"], r["vector"], r["dim"])
+            for r in self.conn.execute("SELECT item_id, vector, dim FROM embeddings")
+        ]
+
+    def get_feedback_items(self, limit: int = 60) -> dict:
+        """Starred and hidden items (the training/feedback signal)."""
+        def q(flag):
+            rows = self.conn.execute(
+                f"""SELECT id, title, source_name, source_category, topic, score,
+                           score_reason FROM items WHERE {flag} = 1
+                    ORDER BY first_seen DESC LIMIT ?""", (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        return {"starred": q("starred"), "hidden": q("hidden")}
+
+    def set_preranks(self, ranks: list[tuple]) -> None:
+        """ranks: [(prerank, item_id)]"""
+        self.conn.executemany("UPDATE items SET prerank = ? WHERE id = ?", ranks)
+        self.conn.commit()
+
     # ── Stories ───────────────────────────────────
 
     def create_story(self, prompt: str, title: str = "") -> int:
@@ -446,6 +501,83 @@ class Store:
             params + [limit],
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_items_brief(self, ids: list[str]) -> list[dict]:
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids[:200]))
+        rows = self.conn.execute(
+            f"""SELECT id, title, summary, source_name, source_category, published, score
+                FROM items WHERE hidden = 0 AND id IN ({placeholders})""",
+            ids[:200],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Knowledge graph ───────────────────────────
+
+    def build_graph(self, min_count: int = 2, max_edges: int = 400) -> dict:
+        """Entity co-occurrence graph with engagement signals.
+
+        Nodes: entities appearing in >= min_count items. Engagement counts
+        stars (x2), dig-deepers, and story membership — the 'explored' signal.
+        """
+        story_ids = {
+            r["item_id"] for r in self.conn.execute("SELECT DISTINCT item_id FROM story_items")
+        }
+        rows = self.conn.execute(
+            """SELECT id, entities, topic, starred, deep_dive IS NOT NULL AS dug
+               FROM items WHERE entities IS NOT NULL AND entities != '[]' AND hidden = 0"""
+        ).fetchall()
+
+        from collections import Counter, defaultdict
+        display = {}                      # canonical(lower) -> most common display form
+        display_counts = defaultdict(Counter)
+        count = Counter()
+        engagement = Counter()
+        topic_votes = defaultdict(Counter)
+        pair_count = Counter()
+
+        for r in rows:
+            try:
+                ents = json.loads(r["entities"])
+            except json.JSONDecodeError:
+                continue
+            canon = []
+            for e in ents:
+                e = str(e).strip()
+                if len(e) < 2:
+                    continue
+                key = e.lower()
+                display_counts[key][e] += 1
+                canon.append(key)
+            canon = sorted(set(canon))
+            eng = (2 * r["starred"]) + r["dug"] + (1 if r["id"] in story_ids else 0)
+            for key in canon:
+                count[key] += 1
+                engagement[key] += eng
+                if r["topic"]:
+                    topic_votes[key][r["topic"]] += 1
+            for a_i in range(len(canon)):
+                for b_i in range(a_i + 1, len(canon)):
+                    pair_count[(canon[a_i], canon[b_i])] += 1
+
+        keep = {k for k, n in count.items() if n >= min_count}
+        nodes = [
+            {
+                "id": k,
+                "label": display_counts[k].most_common(1)[0][0],
+                "count": count[k],
+                "engagement": engagement[k],
+                "topic": topic_votes[k].most_common(1)[0][0] if topic_votes[k] else "other",
+            }
+            for k in keep
+        ]
+        edges = [
+            {"source": a, "target": b, "weight": w}
+            for (a, b), w in pair_count.most_common()
+            if a in keep and b in keep
+        ][:max_edges]
+        return {"nodes": nodes, "edges": edges}
 
     # ── Reports ───────────────────────────────────
 

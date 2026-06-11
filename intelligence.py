@@ -83,6 +83,48 @@ async def assist_profile(
         await backend.close()
 
 
+FEEDBACK_PROMPT = """You maintain an "interest profile" used to score AI news relevance. Learn from the user's actual behavior and propose an improved profile.
+
+CURRENT PROFILE:
+{profile}
+
+ITEMS THE USER STARRED (liked):
+{starred}
+
+ITEMS THE USER HID (rejected):
+{hidden}
+
+Look for patterns: themes they star that the profile underweights, themes they hide that the profile overweights. Propose a revised profile — same structure (intro, HIGH/MEDIUM/LOW PRIORITY bullets), conservative edits only where the evidence is clear.
+
+Respond with ONLY JSON:
+{{"observations": "<2-4 sentences: the patterns you found in their behavior>",
+  "changes": "<1-3 sentences: what you changed and why>",
+  "profile": "<the full revised profile>"}}"""
+
+
+async def suggest_from_feedback(scoring_config: dict, profile: str, feedback: dict) -> dict:
+    """Level-1 evolution: propose profile amendments from stars/hides."""
+    def fmt(items):
+        return "\n".join(
+            f"- [{i.get('topic') or i.get('source_category')}] {i['title']}"
+            f" ({i['source_name']}, scored {int(i['score'] or 0)})"
+            for i in items[:40]
+        ) or "(none yet)"
+    backend = create_backend(scoring_config)
+    try:
+        return await _ask_json(
+            backend,
+            FEEDBACK_PROMPT.format(
+                profile=profile,
+                starred=fmt(feedback["starred"]),
+                hidden=fmt(feedback["hidden"]),
+            ),
+            max_tokens=1100,
+        )
+    finally:
+        await backend.close()
+
+
 # ── Dig deeper ────────────────────────────────────────────────
 
 DIG_PROMPT = """Deep-analyze this item for an AI/ML infrastructure engineer who wants to go beyond the headline.
@@ -226,6 +268,16 @@ async def build_story(scoring_config: dict, store, story_id: int, prompt: str) -
         store.update_story(story_id, title=title)
 
         candidates = store.search_candidates(keywords, limit=150)
+        # Merge in semantic neighbours (catches paraphrases the keywords miss)
+        try:
+            from embeddings import semantic_search
+            base_url = scoring_config.get("ollama", {}).get("base_url", "http://localhost:11434")
+            sem = await semantic_search(store, prompt, limit=80, base_url=base_url)
+            have = {c["id"] for c in candidates}
+            sem_ids = [item_id for item_id, sim in sem if sim >= 0.45 and item_id not in have]
+            candidates += store.get_items_brief(sem_ids)
+        except Exception as e:
+            logger.warning(f"Story #{story_id}: semantic retrieval skipped ({type(e).__name__})")
         logger.info(f"Story #{story_id}: {len(candidates)} candidates for keywords {keywords}")
 
         links = []

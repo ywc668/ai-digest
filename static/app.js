@@ -368,12 +368,14 @@ $("#tabs").addEventListener("click", (e) => {
   $$(".tab").forEach((t) => t.classList.toggle("active", t === tab));
   $("#panel-feed").hidden = !(state.tab === "today" || state.tab === "archive");
   $("#panel-stories").hidden = state.tab !== "stories";
+  $("#panel-map").hidden = state.tab !== "map";
   $("#panel-reports").hidden = state.tab !== "reports";
   $("#panel-runs").hidden = state.tab !== "runs";
   $("#panel-settings").hidden = state.tab !== "settings";
   if (state.tab === "today") { state.days = "1"; $("#days").value = "1"; loadFeed(); }
   if (state.tab === "archive") { state.days = ""; $("#days").value = ""; loadFeed(); }
   if (state.tab === "stories") loadStories();
+  if (state.tab === "map") loadMap();
   if (state.tab === "reports") loadReports();
   if (state.tab === "runs") loadRuns();
   if (state.tab === "settings") loadSettings();
@@ -465,6 +467,85 @@ $("#story-create-btn").addEventListener("click", async () => {
   loadStories(res.id);
 });
 
+// ── knowledge map ────────────────────────────
+
+const TOPIC_COLORS = {
+  "llm-inference": "#b3380c", "training-finetuning": "#92580a",
+  "agents-tooling": "#3f6212", "model-releases": "#185fa5",
+  "ml-infrastructure": "#534ab7", "ai-safety": "#9d174d",
+  "rag-retrieval": "#0e7490", "hardware": "#57534e",
+  "industry-business": "#7c2d12", "other": "#a39a85",
+};
+let cyInstance = null;
+
+async function loadMap() {
+  const minCount = Number($("#map-min-count").value || 2);
+  const g = await api(`/api/graph?min_count=${minCount}`);
+  $("#map-stats").textContent = `${g.nodes.length} entities · ${g.edges.length} links`;
+  if (!g.nodes.length) {
+    $("#map-container").innerHTML =
+      "<p class='hint' style='padding:30px'>No entities yet — they're extracted during scoring; run the pipeline or lower “min items”.</p>";
+    return;
+  }
+  const maxEng = Math.max(1, ...g.nodes.map((n) => n.engagement));
+  const elements = [
+    ...g.nodes.map((n) => ({
+      data: { id: n.id, label: n.label, count: n.count, topic: n.topic, engagement: n.engagement },
+    })),
+    ...g.edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target, weight: e.weight } })),
+  ];
+  if (cyInstance) cyInstance.destroy();
+  cyInstance = cytoscape({
+    container: $("#map-container"),
+    elements,
+    style: [
+      {
+        selector: "node",
+        style: {
+          "background-color": (el) => TOPIC_COLORS[el.data("topic")] || TOPIC_COLORS.other,
+          "background-opacity": (el) => 0.25 + 0.75 * Math.min(1, el.data("engagement") / maxEng),
+          width: (el) => 14 + Math.sqrt(el.data("count")) * 9,
+          height: (el) => 14 + Math.sqrt(el.data("count")) * 9,
+          label: "data(label)",
+          "font-family": "IBM Plex Mono, monospace",
+          "font-size": "9px",
+          color: "#211e18",
+          "text-valign": "bottom",
+          "text-margin-y": 4,
+          "border-width": (el) => (el.data("engagement") > 0 ? 2 : 0.5),
+          "border-color": (el) => TOPIC_COLORS[el.data("topic")] || TOPIC_COLORS.other,
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          width: (el) => Math.min(4, 0.6 * el.data("weight")),
+          "line-color": "#d9d2bf",
+          "curve-style": "haystack",
+        },
+      },
+    ],
+    layout: { name: "cose", animate: false, nodeRepulsion: 9000, idealEdgeLength: 70 },
+    wheelSensitivity: 0.2,
+  });
+  cyInstance.on("tap", "node", (evt) => {
+    const label = evt.target.data("label");
+    // jump to the archive filtered by this entity
+    state.tab = "archive"; state.search = label; state.days = "";
+    $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "archive"));
+    $("#panel-feed").hidden = false; $("#panel-map").hidden = true;
+    $("#search").value = label; $("#days").value = "";
+    loadFeed();
+  });
+  // legend
+  const topicsInUse = [...new Set(g.nodes.map((n) => n.topic))];
+  $("#map-legend").innerHTML = topicsInUse.map((t) =>
+    `<span class="legend-item"><span class="legend-dot" style="background:${TOPIC_COLORS[t] || TOPIC_COLORS.other}"></span>${esc(t)}</span>`
+  ).join("");
+}
+
+$("#map-min-count").addEventListener("change", loadMap);
+
 // ── reports ──────────────────────────────────
 
 let currentReportId = null;
@@ -526,6 +607,24 @@ $("#assist-edit-btn").addEventListener("click", async () => {
     toast(err.message, true);
   } finally {
     btn.disabled = false; btn.textContent = "✨ rewrite";
+  }
+});
+
+$("#assist-feedback-btn").addEventListener("click", async () => {
+  const btn = $("#assist-feedback-btn");
+  btn.disabled = true; btn.textContent = "✨ analyzing your behavior…";
+  try {
+    const res = await api("/api/profile/feedback-suggest", { method: "POST" });
+    $("#cfg-profile").value = res.profile || $("#cfg-profile").value;
+    const obs = $("#feedback-observations");
+    obs.innerHTML = `<b>Observed</b> (from ${res.signal.starred}★ / ${res.signal.hidden}✕):
+      ${esc(res.observations || "")}<br><b>Changed:</b> ${esc(res.changes || "")}`;
+    obs.hidden = false;
+    toast("Amendments proposed — review and Save");
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = "✨ learn from my feedback";
   }
 });
 

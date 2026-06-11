@@ -27,6 +27,7 @@
     <button class="tab active" data-tab="today">Today</button>
     <button class="tab" data-tab="archive">Archive</button>
     <button class="tab" data-tab="stories">Stories</button>
+    <button class="tab" data-tab="map">Map</button>
     <button class="tab" data-tab="reports">Reports</button>
     <button class="tab" data-tab="runs">Runs &amp; Tokens</button>
     <button class="tab" data-tab="settings">Settings</button>
@@ -93,6 +94,28 @@
       <div id="story-list" class="story-list"></div>
       <div id="story-view" class="story-view"><p class="hint">Select a story.</p></div>
     </div>
+  </section>
+
+  <!-- ── KNOWLEDGE MAP ──────────────────────────────────── -->
+  <section id="panel-map" class="panel" hidden>
+    <h2 class="section-head">Knowledge map</h2>
+    <p class="hint">Every node is an entity from your scored items; connected when they appear
+      together. <b>Size</b> = coverage, <b>color</b> = dominant topic,
+      <b>brightness</b> = your engagement (stars, deep dives, stories).
+      Bright regions are explored ground; dim neighbours are where you haven't gone yet.
+      Click a node to see its items.</p>
+    <div class="map-controls">
+      <label class="ctl">min items
+        <select id="map-min-count">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+        </select>
+      </label>
+      <span id="map-stats" class="mono-label"></span>
+    </div>
+    <div id="map-container"></div>
+    <div id="map-legend" class="map-legend"></div>
   </section>
 
   <!-- ── REPORTS ────────────────────────────────────────── -->
@@ -199,6 +222,9 @@
               <button type="button" id="assist-edit-btn" class="ctl-toggle">✨ rewrite</button>
             </div>
             <button type="button" id="assist-interview-btn" class="ctl-toggle">✨ set up via interview</button>
+            <button type="button" id="assist-feedback-btn" class="ctl-toggle"
+              title="Analyze your stars/hides and propose profile amendments">✨ learn from my feedback</button>
+            <div id="feedback-observations" class="hint" hidden></div>
             <div id="interview-box" hidden></div>
             <p class="hint">Proposed changes land in the textarea above — review, then Save.</p>
           </div>
@@ -222,6 +248,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

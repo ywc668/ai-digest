@@ -38,20 +38,17 @@ interest_profile: 'I am a software engineer focused on cloud infrastructure, Kub
   - Hardware for AI (GPUs, TPUs, custom silicon)
 
   '
-# Topic taxonomy — the scorer assigns each item one of these (second
-# dimension alongside source category). Edit freely; keep "other" as catch-all.
 topics:
-  - llm-inference
-  - training-finetuning
-  - agents-tooling
-  - model-releases
-  - ml-infrastructure
-  - ai-safety
-  - rag-retrieval
-  - hardware
-  - industry-business
-  - other
-
+- llm-inference
+- training-finetuning
+- agents-tooling
+- model-releases
+- ml-infrastructure
+- ai-safety
+- rag-retrieval
+- hardware
+- industry-business
+- other
 scoring:
   backend: ollama
   ollama:
@@ -68,7 +65,6 @@ scoring:
   min_score: 5
   max_items: 15
   max_items_to_score: 150
-  # Category balancing: no single source category or topic can dominate the digest
   max_per_category: 6
   max_per_topic: 5
 dedup:
@@ -134,7 +130,7 @@ feeds:
   - name: Practical AI
     url: https://changelog.com/practicalai/feed
 email:
-  enabled: false
+  enabled: true
   subject_prefix: AI Digest
   sender_name: AI Research Digest
 state:

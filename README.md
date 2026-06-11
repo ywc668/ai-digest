@@ -73,6 +73,10 @@ Or run the pipeline headless:
 - **Stories** — user-initiated cross-source threads: describe what you want to follow
   ("how Anthropic is investing in AI security") and the archive is mined into a
   timeline with an LLM-written abstract; refresh after runs to extend it.
+- **Map** — the knowledge graph: entities from your scored items, linked by
+  co-occurrence. Size = coverage, color = topic, brightness = your engagement
+  (stars, deep dives, stories) — explored regions glow, unexplored neighbours stay
+  dim. Click a node to jump to its items.
 - **Reports** — generated daily/weekly markdown briefs (top developments, by-topic,
   worth-your-time, radar). The launchd cron generates these automatically.
 - **Runs & Tokens** — run history, per-stage token ledger, live pipeline log.
@@ -133,12 +137,18 @@ ai-digest/
   See `docs/2026-06-09-local-pipeline-analysis.md` for the full token breakdown and the
   optimization plan (batching + caching + Haiku → ~$0.02–0.04/run).
 
-## Roadmap
+## Self-evolution
 
-- [ ] Hybrid scoring: local model for stages 1–2, Claude for stage-3 deep dives
-- [ ] Interest learning from stars/hides (feedback loop)
-- [ ] Weekly summary view (top items of the week)
-- [ ] Batched stage-1 scoring (one call per 25 titles) for the cloud backend
+The digest learns from your behavior (see `docs/ROADMAP.md`):
+- **Stars/hides are the signal** — ★ what you like, ✕ what you don't.
+- **Level 1**: Settings → *✨ learn from my feedback* — the LLM analyzes your
+  stars/hides and proposes interest-profile amendments.
+- **Level 2**: every item is embedded locally (nomic-embed-text). Once you have
+  **≥8 stars and ≥8 hides**, a classifier trains automatically each run and
+  pre-ranks candidates so the scoring cap keeps the most promising items. The same
+  embeddings power semantic story retrieval.
+- **Level 3** (parked): LoRA fine-tuning of the local model on your preference
+  data — plan in `docs/ROADMAP.md`.
 
 ## License
 

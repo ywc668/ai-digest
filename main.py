@@ -142,36 +142,58 @@ async def _run_pipeline(
     after_dedup = new_count
 
     # 4b. Drop patch/pre-release GitHub noise before spending scoring effort.
-    # Dropped items are still marked seen below so they never resurface.
-    all_new_ids = [i.id for i in new_items]
+    # Dropped items are still marked seen at the end so they never resurface.
     if config.get("filters", {}).get("skip_patch_releases", True):
         new_items, _release_noise = filter_release_noise(new_items)
 
     if not new_items:
         logger.info("No new items after dedup/filtering. Skipping scoring.")
-        store.mark_seen_batch(all_new_ids)
+        store.mark_seen_batch([i.id for i in all_items])
         store.finish_run(
             run_id, fetched=total_fetched, new=new_count, after_dedup=after_dedup,
             scored=0, sent=0, stage_counts={},
         )
         return
 
-    # 5. Cap items to score (prevents marathon runs on large feeds)
+    # 5. Stage 0: embed new items; pre-rank with the feedback classifier if trained
+    prerank_map: dict[str, float] = {}
+    if scoring_config.get("stage0_prerank", True):
+        try:
+            import numpy as np
+            from embeddings import embed_texts, train_classifier, EMBED_MODEL
+            texts = [f"{i.title}\n{(i.summary or '')[:500]}" for i in new_items]
+            base_url = scoring_config.get("ollama", {}).get("base_url", "http://localhost:11434")
+            vectors = await embed_texts(texts, base_url)
+            store.save_embeddings([
+                (item.id, vec.tobytes(), len(vec), EMBED_MODEL)
+                for item, vec in zip(new_items, vectors)
+            ])
+            clf = train_classifier(store)
+            if clf is not None:
+                probs = clf.predict_proba(np.stack(vectors))[:, 1]
+                prerank_map = {i.id: float(p) for i, p in zip(new_items, probs)}
+                logger.info("Stage 0: pre-ranker active — cap will keep the most promising items")
+        except Exception as e:
+            logger.warning(f"Stage 0 skipped ({type(e).__name__}: {e})")
+
+    # 5b. Cap items to score (hard cap — prevents marathon runs on flooded feeds).
+    # Order: pre-ranker probability if trained; otherwise non-arXiv first
+    # (fewer, higher signal), then arXiv.
     max_to_score = scoring_config.get("max_items_to_score", 150)
-    items_to_score = new_items
-    skipped_items = []
-    if len(new_items) > max_to_score:
-        # Prioritize: blogs/labs/github/newsletters/podcasts first (fewer, higher signal),
-        # then arXiv papers fill remaining slots
-        priority_items = [i for i in new_items if i.source_category != "arxiv"]
-        arxiv_items = [i for i in new_items if i.source_category == "arxiv"]
-        remaining_slots = max(0, max_to_score - len(priority_items))
-        items_to_score = priority_items + arxiv_items[:remaining_slots]
-        scored_ids = {i.id for i in items_to_score}
-        skipped_items = [i for i in new_items if i.id not in scored_ids]
+    if prerank_map:
+        candidates = sorted(new_items, key=lambda i: prerank_map.get(i.id, 0), reverse=True)
+    else:
+        candidates = (
+            [i for i in new_items if i.source_category != "arxiv"]
+            + [i for i in new_items if i.source_category == "arxiv"]
+        )
+    items_to_score = candidates[:max_to_score]
+    skipped_items = candidates[max_to_score:]
+    if skipped_items:
         logger.info(
             f"Scoring cap: {len(new_items)} new items → scoring {len(items_to_score)} "
-            f"(skipped {len(skipped_items)} low-priority arXiv papers)"
+            f"(skipped {len(skipped_items)}, ordered by "
+            f"{'pre-ranker' if prerank_map else 'category priority'})"
         )
 
     # 6. Progressive scoring
@@ -219,7 +241,11 @@ async def _run_pipeline(
     for item in skipped_items:
         item.score_stage = "skipped"
     store.save_items(scored_items + skipped_items, run_id)
-    store.mark_seen_batch(all_new_ids)
+    if prerank_map:
+        store.set_preranks([(p, item_id) for item_id, p in prerank_map.items()])
+    # Mark EVERYTHING fetched as seen (refreshes seen_at for recurring feed
+    # entries, so long-lived archive feeds never resurface after seen-id pruning)
+    store.mark_seen_batch([i.id for i in all_items])
     store.prune(
         seen_retention_days=state_config.get("retention_days", 30),
         low_score_retention_days=state_config.get(

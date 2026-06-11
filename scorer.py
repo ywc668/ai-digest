@@ -50,7 +50,7 @@ Scoring guide:
 For GitHub releases: boost major versions and breaking features.
 For arXiv: boost novelty and practical applicability.
 
-Respond with ONLY JSON: {{"score": <0-10>, "reason": "<one sentence>", "topic": "<one topic from the list>", "highlights": ["<up to 4 important words/phrases copied VERBATIM from the summary>"]}}"""
+Respond with ONLY JSON: {{"score": <0-10>, "reason": "<one sentence>", "topic": "<one topic from the list>", "highlights": ["<up to 4 important words/phrases copied VERBATIM from the summary>"], "entities": ["<up to 5 named entities: organizations, models, systems, techniques>"]}}"""
 
 STAGE3_PROMPT = """Evaluate this high-priority item for an AI/ML infrastructure engineer.
 
@@ -67,7 +67,7 @@ Tags: {tags}
 Content: {summary}
 
 Respond with ONLY JSON:
-{{"score": <0-10>, "reason": "<why it matters, 1-2 sentences>", "takeaway": "<action item, 1 sentence>", "topic": "<one topic from the list>", "highlights": ["<up to 5 important words/phrases copied VERBATIM from the content>"]}}"""
+{{"score": <0-10>, "reason": "<why it matters, 1-2 sentences>", "takeaway": "<action item, 1 sentence>", "topic": "<one topic from the list>", "highlights": ["<up to 5 important words/phrases copied VERBATIM from the content>"], "entities": ["<up to 5 named entities: organizations, models, systems, techniques>"]}}"""
 
 
 async def _call(
@@ -107,6 +107,13 @@ def _parse_highlights(result: dict) -> list[str]:
     return [str(h).strip() for h in raw if str(h).strip()][:6]
 
 
+def _parse_entities(result: dict) -> list[str]:
+    raw = result.get("entities", [])
+    if not isinstance(raw, list):
+        return []
+    return [str(e).strip() for e in raw if str(e).strip()][:6]
+
+
 def _parse_topic(result: dict, topics: list[str]) -> str | None:
     raw = str(result.get("topic", "")).strip().lower()
     if not raw or not topics:
@@ -131,9 +138,10 @@ async def _score_stage2(backend, item, interest_profile, topics, usage_log) -> t
         tags=", ".join(item.tags[:10]) if item.tags else "None",
         summary=item.summary[:800] if item.summary else "No summary available",
     )
-    result = await _call(backend, prompt, 250, item, "stage2", usage_log)
+    result = await _call(backend, prompt, 300, item, "stage2", usage_log)
     item.highlights = _parse_highlights(result)
     item.topic = _parse_topic(result, topics)
+    item.entities = _parse_entities(result)
     return float(result.get("score", 0)), result.get("reason", "")
 
 
@@ -148,13 +156,16 @@ async def _score_stage3(backend, item, interest_profile, topics, usage_log) -> t
         tags=", ".join(item.tags[:10]) if item.tags else "None",
         summary=item.summary[:1500] if item.summary else "No content available",
     )
-    result = await _call(backend, prompt, 350, item, "stage3", usage_log)
+    result = await _call(backend, prompt, 400, item, "stage3", usage_log)
     highlights = _parse_highlights(result)
     if highlights:
         item.highlights = highlights
     topic = _parse_topic(result, topics)
     if topic:
         item.topic = topic
+    entities = _parse_entities(result)
+    if entities:
+        item.entities = entities
     reason = result.get("reason", "")
     takeaway = result.get("takeaway", "")
     combined = f"{reason} → {takeaway}" if takeaway else reason

@@ -227,6 +227,40 @@ async def profile_assist(req: ProfileAssistRequest):
         raise HTTPException(502, f"LLM call failed: {type(e).__name__}")
 
 
+@app.post("/api/profile/feedback-suggest")
+async def profile_feedback_suggest():
+    """Level-1 evolution: propose profile amendments from stars/hides."""
+    from intelligence import suggest_from_feedback
+    config = yaml.safe_load(CONFIG_PATH.read_text())
+    store = get_store()
+    try:
+        feedback = store.get_feedback_items()
+    finally:
+        store.close()
+    if not feedback["starred"] and not feedback["hidden"]:
+        raise HTTPException(400, "No stars or hides yet — react to some items first")
+    try:
+        result = await suggest_from_feedback(
+            config["scoring"], config.get("interest_profile", ""), feedback
+        )
+        result["signal"] = {
+            "starred": len(feedback["starred"]), "hidden": len(feedback["hidden"])
+        }
+        return result
+    except Exception:
+        logger.exception("feedback suggest failed")
+        raise HTTPException(502, "LLM call failed")
+
+
+@app.get("/api/graph")
+async def knowledge_graph(min_count: int = 2):
+    store = get_store()
+    try:
+        return store.build_graph(min_count=min_count)
+    finally:
+        store.close()
+
+
 @app.post("/api/items/{item_id}/dig")
 async def dig_item(item_id: str, force: bool = False):
     from intelligence import dig_deeper
