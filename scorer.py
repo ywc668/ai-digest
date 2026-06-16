@@ -180,16 +180,34 @@ async def _progressive_score_item(
     s1_threshold: float,
     s3_threshold: float,
     usage_log: list,
+    prerank: float | None = None,
+    rescue_threshold: float | None = None,
 ) -> FeedItem:
-    """Run progressive scoring cascade for a single item."""
+    """Run progressive scoring cascade for a single item.
+
+    Stage-1 rescue: if the title screen would drop the item but the feedback
+    pre-ranker is confident it's interesting (prerank >= rescue_threshold), let
+    it through to stage 2 instead of hard-cutting. This uses historical
+    star/hide signal to override a shallow title-only judgement.
+    """
     try:
         # Stage 1: Title screen
         s1_score = await _score_stage1(backend, item, interest_profile, usage_log)
         if s1_score < s1_threshold:
-            item.score = s1_score
-            item.score_reason = "Filtered at title screen"
-            item.score_stage = "stage1_filtered"
-            return item
+            rescued = (
+                rescue_threshold is not None
+                and prerank is not None
+                and prerank >= rescue_threshold
+            )
+            if not rescued:
+                item.score = s1_score
+                item.score_reason = "Filtered at title screen"
+                item.score_stage = "stage1_filtered"
+                return item
+            logger.info(
+                f"Stage-1 rescue: '{item.title[:45]}' (s1={s1_score:.0f}, "
+                f"prerank={prerank:.2f}) → promoted to stage 2"
+            )
 
         # Stage 2: Title + summary
         s2_score, s2_reason = await _score_stage2(backend, item, interest_profile, topics, usage_log)
@@ -225,21 +243,26 @@ async def score_items(
     topics: list[str] | None = None,
     usage_log: list | None = None,
     progress_callback=None,
+    prerank_map: dict | None = None,
 ) -> list[FeedItem]:
     """Score items with three-stage progressive filtering.
 
     topics: taxonomy the scorer assigns each item to (stage 2+).
     usage_log: optional list that receives one dict per LLM call.
     progress_callback: optional fn(done, total) invoked after each item.
+    prerank_map: {item_id: prerank prob} — enables stage-1 rescue of items the
+                 feedback classifier rates above scoring.stage1_rescue_prerank.
     """
     if not items:
         return items
     if usage_log is None:
         usage_log = []
     topics = topics or []
+    prerank_map = prerank_map or {}
 
     s1_threshold = scoring_config.get("stage1_threshold", 3)
     s3_threshold = scoring_config.get("stage3_threshold", 7)
+    rescue_threshold = scoring_config.get("stage1_rescue_prerank", 0.6) if prerank_map else None
 
     backend = create_backend(scoring_config)
     if not await backend.check_available():
@@ -258,7 +281,8 @@ async def score_items(
     async def score_and_report(item):
         nonlocal done
         result = await _progressive_score_item(
-            backend, item, interest_profile, topics, s1_threshold, s3_threshold, usage_log
+            backend, item, interest_profile, topics, s1_threshold, s3_threshold, usage_log,
+            prerank=prerank_map.get(item.id), rescue_threshold=rescue_threshold,
         )
         done += 1
         if progress_callback:

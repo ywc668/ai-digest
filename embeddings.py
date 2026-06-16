@@ -106,6 +106,74 @@ def prerank_items(store, item_ids: list[str], clf) -> dict[str, float]:
     return dict(zip(found, probs.astype(float)))
 
 
+def semantic_dedup(
+    new_items, new_vectors,
+    archive_ids=None, archive_mat=None, archive_titles=None,
+    embed_threshold: float = 0.84, title_threshold: float = 0.45,
+):
+    """Collapse cross-source duplicates the lexical pass misses (paraphrased
+    titles, or the same story re-reported in a later run).
+
+    Hybrid gate: high embedding cosine AND lexical title overlap — the embedding
+    gives recall (catches paraphrases), the title confirm avoids merging merely
+    related items (e.g. two distinct papers on the same topic). Thresholds were
+    calibrated on the live archive.
+
+    Returns (kept_items, kept_vectors, merges) where merges is a list of
+    (kept_title, dropped_title, cosine, scope) for logging/audit.
+    """
+    from dedup import _tokenize, _cosine_similarity
+
+    n = len(new_items)
+    merges = []
+    if n == 0:
+        return [], [], merges
+
+    N = np.stack([v / (np.linalg.norm(v) + 1e-9) for v in new_vectors])
+    titles = [it.title for it in new_items]
+    tokens = [_tokenize(t) for t in titles]
+    dropped = set()
+
+    # Phase A — within this batch (same story from two sources in one run)
+    simN = N @ N.T
+    for i in range(n):
+        if i in dropped:
+            continue
+        for j in range(i + 1, n):
+            if j in dropped:
+                continue
+            if simN[i, j] >= embed_threshold and \
+               _cosine_similarity(tokens[i], tokens[j]) >= title_threshold:
+                # keep the one with the longer summary
+                if len(new_items[j].summary or "") > len(new_items[i].summary or ""):
+                    i_keep, i_drop = j, i
+                else:
+                    i_keep, i_drop = i, j
+                dropped.add(i_drop)
+                merges.append((titles[i_keep], titles[i_drop], float(simN[i, j]), "batch"))
+                if i_drop == i:
+                    break  # i itself dropped; stop comparing from it
+
+    # Phase B — against the recent archive (same story re-reported across runs)
+    if archive_mat is not None and len(archive_ids):
+        for i in range(n):
+            if i in dropped:
+                continue
+            sims = archive_mat @ N[i]
+            k = int(np.argmax(sims))
+            if sims[k] >= embed_threshold and \
+               _cosine_similarity(tokens[i], _tokenize(archive_titles[k])) >= title_threshold:
+                dropped.add(i)
+                merges.append((archive_titles[k], titles[i], float(sims[k]), "archive"))
+
+    kept_items, kept_vectors = [], []
+    for idx, it in enumerate(new_items):
+        if idx not in dropped:
+            kept_items.append(it)
+            kept_vectors.append(new_vectors[idx])
+    return kept_items, kept_vectors, merges
+
+
 async def semantic_search(
     store, query: str, limit: int = 100,
     base_url: str = "http://localhost:11434",

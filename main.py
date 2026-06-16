@@ -155,12 +155,14 @@ async def _run_pipeline(
         )
         return
 
-    # 5. Stage 0: embed new items; pre-rank with the feedback classifier if trained
+    # 5. Stage 0: embed new items, semantic-dedup, then pre-rank with the
+    # feedback classifier (if trained). Embeddings power both dedup and prerank.
     prerank_map: dict[str, float] = {}
-    if scoring_config.get("stage0_prerank", True):
+    new_vectors = None
+    if scoring_config.get("stage0_prerank", True) or dedup_config.get("semantic", True):
         try:
             import numpy as np
-            from embeddings import embed_texts, train_classifier, EMBED_MODEL
+            from embeddings import embed_texts, semantic_dedup, train_classifier, EMBED_MODEL
             texts = [f"{i.title}\n{(i.summary or '')[:500]}" for i in new_items]
             base_url = scoring_config.get("ollama", {}).get("base_url", "http://localhost:11434")
             vectors = await embed_texts(texts, base_url)
@@ -168,13 +170,42 @@ async def _run_pipeline(
                 (item.id, vec.tobytes(), len(vec), EMBED_MODEL)
                 for item, vec in zip(new_items, vectors)
             ])
+
+            # Semantic cross-source dedup (catches paraphrases + cross-run re-reports
+            # the lexical title pass misses). Dropped items stay marked-seen.
+            if dedup_config.get("semantic", True):
+                arch_ids, arch_mat, arch_titles = store.get_archive_index(
+                    exclude_ids={i.id for i in new_items},
+                    days=dedup_config.get("semantic_archive_days", 21),
+                )
+                new_items, vectors, merges = semantic_dedup(
+                    new_items, vectors, arch_ids, arch_mat, arch_titles,
+                    embed_threshold=dedup_config.get("semantic_embed_threshold", 0.84),
+                    title_threshold=dedup_config.get("semantic_title_threshold", 0.45),
+                )
+                if merges:
+                    after_dedup = len(new_items)
+                    logger.info(f"Semantic dedup: dropped {len(merges)} duplicate(s)")
+                    for kept, drop, sim, scope in merges[:10]:
+                        logger.info(f"  [{scope} {sim:.2f}] '{drop[:45]}' ≈ '{kept[:45]}'")
+
+            new_vectors = vectors
             clf = train_classifier(store)
-            if clf is not None:
+            if clf is not None and new_items:
                 probs = clf.predict_proba(np.stack(vectors))[:, 1]
                 prerank_map = {i.id: float(p) for i, p in zip(new_items, probs)}
                 logger.info("Stage 0: pre-ranker active — cap will keep the most promising items")
         except Exception as e:
             logger.warning(f"Stage 0 skipped ({type(e).__name__}: {e})")
+
+    if not new_items:
+        logger.info("No new items after semantic dedup. Skipping scoring.")
+        store.mark_seen_batch([i.id for i in all_items])
+        store.finish_run(
+            run_id, fetched=total_fetched, new=new_count, after_dedup=after_dedup,
+            scored=0, sent=0, stage_counts={},
+        )
+        return
 
     # 5b. Cap items to score (hard cap — prevents marathon runs on flooded feeds).
     # Order: pre-ranker probability if trained; otherwise non-arXiv first
@@ -206,6 +237,7 @@ async def _run_pipeline(
         scoring_config=scoring_config,
         topics=config.get("topics", []),
         usage_log=usage_log,
+        prerank_map=prerank_map,
     )
 
     # Persist token usage

@@ -67,9 +67,19 @@ scoring:
   max_items_to_score: 150
   max_per_category: 6
   max_per_topic: 5
+  # Stage-1 rescue: when the feedback pre-ranker rates an item this high, let it
+  # through the title screen even if stage 1 would drop it. Needs >=8 stars + >=8
+  # hides for the pre-ranker to be active; until then this never fires.
+  stage1_rescue_prerank: 0.6
 dedup:
-  title_similarity_threshold: 0.7
+  title_similarity_threshold: 0.7   # lexical (token cosine) cross-source dedup within a run
   cross_source: true
+  # Semantic dedup: catches paraphrased / cross-run re-reports the lexical pass misses.
+  # Hybrid gate — embedding cosine AND title-token cosine — calibrated on the archive.
+  semantic: true
+  semantic_embed_threshold: 0.84
+  semantic_title_threshold: 0.45
+  semantic_archive_days: 21         # also compare new items against this window of archive
 filters:
   skip_patch_releases: true
 feeds:

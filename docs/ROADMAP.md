@@ -19,6 +19,19 @@ for each parked item. Background research: `docs/2026-06-10-self-evolution-resea
   story engine
 - **Knowledge map** — entities extracted at scoring; Map tab (Cytoscape): size =
   coverage, color = topic, brightness = engagement → explored vs unexplored ground
+- **Baseline-limitation fixes** (the three known gaps):
+  - ③ **Semantic cross-source dedup** — hybrid gate (embedding cosine ≥0.84 AND
+    title-token cosine ≥0.45, calibrated on the archive) collapses paraphrased and
+    cross-run re-reports the lexical pass missed; runs within-batch and against a
+    21-day archive window. `dedup.semantic*` in config.
+  - ① **Stage-1 rescue** — items the title screen would drop but the feedback
+    pre-ranker rates ≥`stage1_rescue_prerank` (0.6) are promoted to stage 2, so a
+    shallow title judgement can't permanently bury something your history likes.
+    Active once the pre-ranker trains (≥8 stars + ≥8 hides).
+  - ② **Historical signal in scoring** — pre-ranker (trained on stars/hides) orders
+    the scoring cap and drives the ① rescue; profile feedback loop folds stars/hides
+    into the interest profile. *Remaining:* the final per-item score is still
+    LLM-only; blending prerank into the displayed score is a future option.
 
 ## Parked — Level 3: local fine-tuning on preference data
 

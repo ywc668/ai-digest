@@ -399,6 +399,30 @@ class Store:
             for r in self.conn.execute("SELECT item_id, vector, dim FROM embeddings")
         ]
 
+    def get_archive_index(self, exclude_ids: set, days: int = 21):
+        """Recent embedded items (excluding the given ids), for semantic dedup of
+        new items against the archive. Returns (ids, normalized_matrix, titles)."""
+        import numpy as np
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = self.conn.execute(
+            """SELECT e.item_id, e.vector, i.title
+               FROM embeddings e JOIN items i ON i.id = e.item_id
+               WHERE COALESCE(i.published, i.first_seen) >= ?""",
+            (cutoff,),
+        ).fetchall()
+        ids, vecs, titles = [], [], []
+        for r in rows:
+            if r["item_id"] in exclude_ids:
+                continue
+            ids.append(r["item_id"])
+            vecs.append(np.frombuffer(r["vector"], dtype=np.float32))
+            titles.append(r["title"])
+        if not ids:
+            return [], None, []
+        mat = np.stack(vecs)
+        mat = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9)
+        return ids, mat, titles
+
     def get_feedback_items(self, limit: int = 60) -> dict:
         """Starred and hidden items (the training/feedback signal)."""
         def q(flag):
