@@ -247,6 +247,30 @@ don't exist — `category`, `published_at`, `created_at`).
 | `created_at` | `coalesce(published, first_seen)` parsed ISO-8601 → unix int |
 | `ingested_by` | constant `'migration'` |
 
+### Document id scheme (Step 1.3)
+
+`documents.id` is a content identity hash, but the exact recipe is per-source:
+
+- **File loaders** (text, markdown, …): `id = SHA256(content)` — the natural
+  identity for a file; re-ingesting the same body dedups.
+- **Digest archive**: `id = SHA256(title + summary)` — deliberately matches the
+  Step 1.2 migration so re-ingesting via `digest_archive:*` dedups against the
+  already-migrated rows instead of creating parallel copies.
+
+The mapping above is implemented once in `ask/loaders/_digest_mapper.py` and
+shared by both `ask/db/migrate.py` (bulk migration) and
+`ask/loaders/digest_archive_loader.py` (on-demand refresh), so the two cannot
+drift (regression-tested in `ask/tests/test_loaders.py`).
+
+### Loader status (Step 1.3)
+
+Implemented: `TextLoader` (.txt), `MarkdownLoader` (.md/.markdown, frontmatter),
+`DigestArchiveLoader` (`digest_archive:all|starred|since=YYYY-MM-DD`). Routing via
+`ask/loaders/get_loader_for`. Persistence bridge: `ask/db/persist.py`
+(`save_document` / `save_documents`, INSERT OR IGNORE dedup). PDF / Web / arXiv
+loaders are Step 1.4. Loaders raise `LoaderError` on empty/whitespace/unreadable
+sources rather than emitting empty Documents.
+
 Dedup: `id` (the content hash) is the primary key; `INSERT OR IGNORE` plus a
 Python-side seen-set skip collisions and count them as `skipped_duplicates`.
 Idempotent: re-running migrates 0 new rows.

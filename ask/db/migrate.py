@@ -1,23 +1,18 @@
-"""Schema application and migration of existing AI Digest items into `documents`.
+"""Schema application and one-time migration of `items` → `documents`.
 
-Two responsibilities (see ask/DESIGN.md §3):
   apply_schema()                — apply ask/db/schema.sql (idempotent)
-  migrate_items_to_documents()  — copy the existing `items` rows into `documents`
+  migrate_items_to_documents()  — bulk copy existing `items` into `documents`
+  status()                      — counts across items / documents / chunks
 
-The migration is done in Python (not the illustrative SQL in DESIGN.md) because
-it needs SHA256 ids, ISO-timestamp → unix conversion, a content fallback, and
-exact per-row counters with a dry-run mode — none of which plain SQLite SQL
-offers. The real `items` column names differ from DESIGN.md's illustrative
-snippet; the mappings below are the source of truth and DESIGN.md §3 has been
-updated to match.
+The item→Document mapping lives in ask/loaders/_digest_mapper.py (shared with
+the DigestArchiveLoader so the two never drift). This module keeps the bulk
+migration concerns: dry-run, exact counters, and a single executemany insert.
+See ask/DESIGN.md §3.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-import time
-from datetime import datetime
 from pathlib import Path
 
 from .connection import get_db
@@ -57,82 +52,14 @@ def apply_schema(db_path: str | None = None) -> dict:
     return {"tables_created": created, "already_existed": existed}
 
 
-# ── Item → Document mapping ────────────────────────────────────
+# ── Migration ─────────────────────────────────────────────────
 
-def _iso_to_unix(value: str | None) -> int | None:
-    if not value:
-        return None
-    try:
-        return int(datetime.fromisoformat(value).timestamp())
-    except (ValueError, TypeError):
-        return None
-
-
-def _highlights_text(raw: str | None) -> str:
-    """`items.highlights` is a JSON array string; render it as plain text."""
-    if not raw:
-        return ""
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return ", ".join(str(x).strip() for x in parsed if str(x).strip())
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return raw.strip()
-
-
-def _json_list(raw: str | None) -> list:
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, list) else []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _build_document(item) -> tuple[tuple | None, str | None]:
-    """Map one `items` row → a documents row tuple, or (None, error_reason)."""
-    title = item["title"] or ""
-    summary = item["summary"] or ""
-
-    # id: SHA256 of (title + summary) — per DESIGN.md §3 / task spec.
-    doc_id = hashlib.sha256((title + summary).encode("utf-8")).hexdigest()
-
-    # content: summary + highlights; fall back to title; error if empty.
-    highlights = _highlights_text(item["highlights"])
-    content = " ".join(p for p in (summary.strip(), highlights) if p).strip()
-    if not content:
-        content = title.strip()
-    if not content:
-        return None, "empty content (no summary, highlights, or title)"
-
-    source_category = item["source_category"] or ""
-    document_type = "paper" if source_category == "arxiv" else "article"
-    created_at = (
-        _iso_to_unix(item["published"])
-        or _iso_to_unix(item["first_seen"])
-        or int(time.time())
+def _document_row(doc) -> tuple:
+    """Document → the tuple shape used by the documents INSERT."""
+    return (
+        doc.id, doc.source_type, doc.source_path, doc.title, doc.content,
+        json.dumps(doc.metadata), doc.document_type, doc.created_at, doc.ingested_by,
     )
-
-    metadata = json.dumps({
-        "original_score": item["score"],
-        "category": source_category,
-        "starred": bool(item["starred"]),
-        "hidden": bool(item["hidden"]),
-        "source_name": item["source_name"],
-        "topic": item["topic"],
-        "authors": _json_list(item["authors"]),
-        "tags": _json_list(item["tags"]),
-        "published": item["published"],
-        "original_item_id": item["id"],
-    })
-
-    row = (
-        doc_id, "digest_archive", item["url"] or "", title, content,
-        metadata, document_type, created_at, "migration",
-    )
-    return row, None
 
 
 def migrate_items_to_documents(db_path: str | None = None, dry_run: bool = False) -> dict:
@@ -141,14 +68,17 @@ def migrate_items_to_documents(db_path: str | None = None, dry_run: bool = False
     Dedup: SHA256(title+summary) is the primary key; collisions are skipped.
     dry_run=True computes counts without inserting (and without creating schema).
     """
+    # Imported lazily so importing this module doesn't pull the whole loaders
+    # package (and its optional deps) — avoids any import-cycle surprises too.
+    from ask.loaders._digest_mapper import item_to_document
+
     if not dry_run:
         apply_schema(db_path)  # ensure target tables exist (idempotent)
 
     conn = get_db(db_path)
     try:
-        have_documents = "documents" in _existing_tables(conn)
         existing_ids: set[str] = set()
-        if have_documents:
+        if "documents" in _existing_tables(conn):
             existing_ids = {r["id"] for r in conn.execute("SELECT id FROM documents")}
 
         items = conn.execute("SELECT * FROM items").fetchall()
@@ -162,20 +92,21 @@ def migrate_items_to_documents(db_path: str | None = None, dry_run: bool = False
 
         for item in items:
             try:
-                row, err = _build_document(item)
+                doc, err = item_to_document(item)
             except Exception as e:  # defensive: never let one row abort the run
-                row, err = None, f"{type(e).__name__}: {e}"
+                doc, err = None, f"{type(e).__name__}: {e}"
             if err:
                 skipped_errors += 1
                 if len(sample_errors) < 5:
-                    sample_errors.append({"item_id": item["id"], "title": item["title"], "reason": err})
+                    sample_errors.append(
+                        {"item_id": item["id"], "title": item["title"], "reason": err}
+                    )
                 continue
-            doc_id = row[0]
-            if doc_id in existing_ids or doc_id in seen:
+            if doc.id in existing_ids or doc.id in seen:
                 skipped_duplicates += 1
                 continue
-            seen.add(doc_id)
-            to_insert.append(row)
+            seen.add(doc.id)
+            to_insert.append(_document_row(doc))
 
         if not dry_run and to_insert:
             conn.executemany(
@@ -207,8 +138,8 @@ def status(db_path: str | None = None) -> dict:
     try:
         tables = _existing_tables(conn)
 
-        def count(sql, *params):
-            return conn.execute(sql, params).fetchone()[0]
+        def count(sql):
+            return conn.execute(sql).fetchone()[0]
 
         items = count("SELECT COUNT(*) FROM items") if "items" in tables else 0
         documents = count("SELECT COUNT(*) FROM documents") if "documents" in tables else 0

@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from ask.db import migrate as m
+from ask.db import persist
+from ask.loaders import LoaderError, get_loader_for
 
 
 def _cmd_init_schema(args) -> int:
@@ -56,6 +59,71 @@ def _cmd_status(args) -> int:
     return 0
 
 
+def _short(doc_id: str) -> str:
+    return f"{doc_id[:4]}...{doc_id[-4:]}"
+
+
+def _cmd_ingest(args) -> int:
+    if args.batch:
+        return _ingest_batch(args)
+
+    source = args.source
+    print(f"Ingesting: {source}")
+    try:
+        loader = get_loader_for(source)
+        docs = loader.load(source)
+    except LoaderError as e:
+        print(f"  ! error: {e}")
+        return 1
+
+    # Single file → detailed output; archive/multi → summary.
+    if len(docs) == 1 and not source.startswith("digest_archive:"):
+        doc = docs[0]
+        print(f'  → Document loaded (title: "{doc.title}", {len(doc.content)} chars)')
+        existed = persist.document_exists(doc.id, args.db)
+        persist.save_document(doc, args.db)
+        print(f"  → Saved as id {_short(doc.id)} "
+              f"({'already exists' if existed else 'newly inserted'})")
+    else:
+        res = persist.save_documents(docs, args.db)
+        print(f"  → Loaded {len(docs)} documents")
+        print(f"  Summary: {res['inserted']} inserted, {res['duplicates']} duplicate, 0 errors")
+    return 0
+
+
+def _ingest_batch(args) -> int:
+    folder = Path(args.source)
+    print(f"Batch ingesting: {folder}")
+    if not folder.is_dir():
+        print(f"  ! error: not a directory: {folder}")
+        return 1
+
+    files = sorted({p for ext in ("*.txt", "*.md", "*.markdown") for p in folder.rglob(ext)})
+    n_md = sum(1 for f in files if f.suffix in (".md", ".markdown"))
+    n_txt = sum(1 for f in files if f.suffix == ".txt")
+    print(f"  Found {len(files)} supported files ({n_md} .md, {n_txt} .txt)")
+
+    inserted = duplicates = errors = 0
+    for f in files:
+        try:
+            docs = get_loader_for(str(f)).load(str(f))
+        except LoaderError as e:
+            errors += 1
+            print(f"  → {f.name}: error ({e})")
+            continue
+        for doc in docs:
+            existed = persist.document_exists(doc.id, args.db)
+            persist.save_document(doc, args.db)
+            if existed:
+                duplicates += 1
+                print(f"  → {f.name}: already exists (id {_short(doc.id)})")
+            else:
+                inserted += 1
+                print(f"  → {f.name}: inserted (id {_short(doc.id)})")
+    print(f"  Summary: {inserted} inserted, {duplicates} duplicate, {errors} errors")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ask.cli", description="AI Digest Ask — admin CLI")
     parser.add_argument("--db", default=None, help="override database path (default: AI Digest's)")
@@ -68,11 +136,17 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("status", help="show item/document/chunk counts")
 
+    p_ingest = sub.add_parser("ingest", help="ingest a file, folder, or digest_archive: source")
+    p_ingest.add_argument("source", help="file path, folder (with --batch), or digest_archive:<filter>")
+    p_ingest.add_argument("--batch", action="store_true",
+                          help="treat source as a folder; ingest all .txt/.md/.markdown")
+
     args = parser.parse_args(argv)
     handlers = {
         "init-schema": _cmd_init_schema,
         "migrate": _cmd_migrate,
         "status": _cmd_status,
+        "ingest": _cmd_ingest,
     }
     return handlers[args.command](args)
 
