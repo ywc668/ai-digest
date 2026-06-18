@@ -227,30 +227,29 @@ CREATE TABLE query_history (
 
 ### Migration from existing AI Digest
 
-All items in the existing `items` table will be migrated to `documents`:
+All items in the existing `items` table are migrated to `documents` (no score
+filter — ingest everything, per user decision). Implemented in Python
+(`ask/db/migrate.py`), not raw SQL: SQLite has no `sha256()`, the timestamps
+need ISO→unix conversion, and we need a content fallback + per-row counters +
+dry-run. The mapping below reflects the **actual** `items` columns (Step 1.2
+reconciled the original illustrative snippet, which referenced columns that
+don't exist — `category`, `published_at`, `created_at`).
 
-```sql
-INSERT INTO documents (id, source_type, source_path, title, content, metadata, document_type, created_at)
-SELECT
-    sha256(coalesce(title, '') || coalesce(summary, '')) AS id,
-    'digest_archive' AS source_type,
-    url AS source_path,
-    title,
-    coalesce(summary, '') || ' ' || coalesce(highlights, '') AS content,
-    json_object(
-        'original_score', score,
-        'category', category,
-        'starred', starred,
-        'hidden', hidden
-    ) AS metadata,
-    CASE category
-        WHEN 'PAPERS' THEN 'paper'
-        ELSE 'article'
-    END AS document_type,
-    coalesce(published_at, created_at) AS created_at
-FROM items;
--- NO score filter: ingest everything per user decision
-```
+| documents column | derived from `items` |
+|---|---|
+| `id` | `sha256(coalesce(title,'') + coalesce(summary,''))` (hex) |
+| `source_type` | constant `'digest_archive'` |
+| `source_path` | `coalesce(url, '')` (`url` is nullable; `source_path` is NOT NULL) |
+| `title` | `title` |
+| `content` | `summary` + space + highlights (JSON array rendered to text); if both empty, fall back to `title`; if still empty, skip as error |
+| `metadata` | JSON: `original_score`=`score`, `category`=`source_category`, `starred`, `hidden`, plus `source_name`, `topic`, `authors`, `tags`, `published`, `original_item_id` |
+| `document_type` | `'paper'` if `source_category = 'arxiv'`, else `'article'` |
+| `created_at` | `coalesce(published, first_seen)` parsed ISO-8601 → unix int |
+| `ingested_by` | constant `'migration'` |
+
+Dedup: `id` (the content hash) is the primary key; `INSERT OR IGNORE` plus a
+Python-side seen-set skip collisions and count them as `skipped_duplicates`.
+Idempotent: re-running migrates 0 new rows.
 
 ---
 
