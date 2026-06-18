@@ -7,3 +7,9 @@ python-dateutil>=2.8.0
 httpx>=0.27.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
+# embeddings pre-ranker + knowledge map (added W3; were installed but unlisted)
+numpy>=2.0
+scikit-learn>=1.5
+# Ask module — vector store (loadable SQLite extension; needs a Python built
+# with --enable-loadable-sqlite-extensions)
+sqlite-vec>=0.1.6

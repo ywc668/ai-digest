@@ -1,0 +1,2 @@
+-- ask schema — intentionally empty. Step 1.2 will define documents/chunks/vec_chunks/etc.
+-- Source of truth: ask/DESIGN.md §3.

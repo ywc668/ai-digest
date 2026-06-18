@@ -211,3 +211,6 @@ digest.db
 digest.db-wal
 digest.db-shm
 digest_latest.html
+
+# manual DB backups (e.g. before ask phases)
+backups/
